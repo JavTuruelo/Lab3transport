@@ -4,6 +4,7 @@ import numpy as np
 import math
 
 N = 50
+t = 1 
 
 m = ConcreteModel()
 
@@ -11,24 +12,13 @@ m.n = Param(initialize = N-1, within = Integers)     # n = number of subinterval
 m.N = Set(initialize = range(0,value(m.n)+1))       # n+1 elements (nodes)
 m.Ns = Set(initialize = range(0,value(m.n)))        # n elements (subintervals)
 
-
-
-#### Definicion de parametros:
-
-x1_0 = 0
-x1_f = 1
-
-x2_0 = 0
-x2_f = 0
-
 #####################################################################################
 #### Defining Variables and parameters ---------------------------------
 #####################################################################################
-m.x1 = Var(m.N, within = Reals)
-m.x2 = Var(m.N, within = Reals)
-m.u = Var(m.N, within = Reals)
+m.x_e = Var(m.N, within = Reals)
+m.V = Var(m.N, within = Reals)
+m.T = Var(m.N, within = NonNegativeReals)
 
-m.step = 1/m.n
 
 #####################################################################################
 ###  Differential Constraints   --------------------------------
