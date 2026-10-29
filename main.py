@@ -3,9 +3,11 @@ from pyomo.environ import *
 import numpy as np
 import math
 
+N = 50
+
 m = ConcreteModel()
 
-m.n = Param(initialize = 50, within = Integers)     # n = number of subintervals      
+m.n = Param(initialize = N-1, within = Integers)     # n = number of subintervals      
 m.N = Set(initialize = range(0,value(m.n)+1))       # n+1 elements (nodes)
 m.Ns = Set(initialize = range(0,value(m.n)))        # n elements (subintervals)
 
