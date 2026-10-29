@@ -1,0 +1,66 @@
+{
+  "settings": {
+    "nodes": [
+      50,
+      100,
+      150,
+      300
+    ],
+    "tf_s": 4700.0,
+    "distance_m": 1000000.0,
+    "altitude_ft": 38000.0,
+    "initial_mass_kg": 51000.0,
+    "initial_speed_m_s": 216.0666666666667,
+    "final_speed_kn": null
+  },
+  "results": [
+    {
+      "nodes": 50,
+      "fuel_kg": 2316.3760442000566,
+      "final_speed_kn": 336.67853653683267,
+      "termination": "optimal",
+      "max_defect_distance_m": 2.3283064365386963e-10,
+      "max_defect_speed_m_s": 5.319208615239823e-09,
+      "max_defect_mass_kg": 1.1402924826597882e-08,
+      "max_defect_midpoint_distance_m": 2.3283064365386963e-10,
+      "max_defect_midpoint_speed_m_s": 1.7601848867343506e-09,
+      "max_defect_midpoint_mass_kg": 2.393790055066347e-09
+    },
+    {
+      "nodes": 100,
+      "fuel_kg": 2316.557436509691,
+      "final_speed_kn": 336.6777036376181,
+      "termination": "optimal",
+      "max_defect_distance_m": 2.801243681460619e-10,
+      "max_defect_speed_m_s": 7.826233563434926e-07,
+      "max_defect_mass_kg": 1.5506571315881956e-07,
+      "max_defect_midpoint_distance_m": 2.3283064365386963e-10,
+      "max_defect_midpoint_speed_m_s": 4.560186539492861e-08,
+      "max_defect_midpoint_mass_kg": 7.58591340854764e-08
+    },
+    {
+      "nodes": 150,
+      "fuel_kg": 2316.5591646062967,
+      "final_speed_kn": 336.6776960437281,
+      "termination": "optimal",
+      "max_defect_distance_m": 2.128217602148652e-10,
+      "max_defect_speed_m_s": 5.553085511422751e-07,
+      "max_defect_mass_kg": 6.860490131543884e-07,
+      "max_defect_midpoint_distance_m": 2.3283064365386963e-10,
+      "max_defect_midpoint_speed_m_s": 1.951661658949888e-07,
+      "max_defect_midpoint_mass_kg": 7.675407687202096e-07
+    },
+    {
+      "nodes": 300,
+      "fuel_kg": 2316.560650312662,
+      "final_speed_kn": 336.67768908614573,
+      "termination": "optimal",
+      "max_defect_distance_m": 2.0872903405688703e-10,
+      "max_defect_speed_m_s": 9.294492828715306e-07,
+      "max_defect_mass_kg": 9.72555995737423e-07,
+      "max_defect_midpoint_distance_m": 2.3283064365386963e-10,
+      "max_defect_midpoint_speed_m_s": 1.483214759900875e-07,
+      "max_defect_midpoint_mass_kg": 1.857333700172603e-07
+    }
+  ]
+}

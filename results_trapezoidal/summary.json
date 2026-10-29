@@ -1,0 +1,54 @@
+{
+  "settings": {
+    "nodes": [
+      50,
+      100,
+      150,
+      300
+    ],
+    "tf_s": 4700.0,
+    "distance_m": 1000000.0,
+    "altitude_ft": 38000.0,
+    "initial_mass_kg": 51000.0,
+    "initial_speed_m_s": 216.0666666666667,
+    "final_speed_kn": null
+  },
+  "results": [
+    {
+      "nodes": 50,
+      "fuel_kg": 2317.298929621611,
+      "final_speed_kn": 336.6742995076157,
+      "termination": "optimal",
+      "max_defect_distance_m": 1.7826096154749393e-10,
+      "max_defect_speed_m_s": 1.229581656492229e-07,
+      "max_defect_mass_kg": 3.0643205661817774e-07
+    },
+    {
+      "nodes": 100,
+      "fuel_kg": 2316.730376417523,
+      "final_speed_kn": 336.67690988722865,
+      "termination": "optimal",
+      "max_defect_distance_m": 1.9281287677586079e-10,
+      "max_defect_speed_m_s": 9.088328756234887e-09,
+      "max_defect_mass_kg": 1.0128616168003646e-08
+    },
+    {
+      "nodes": 150,
+      "fuel_kg": 2316.631270246733,
+      "final_speed_kn": 336.6773648052302,
+      "termination": "optimal",
+      "max_defect_distance_m": 2.0463630789890885e-10,
+      "max_defect_speed_m_s": 2.7856569495554595e-08,
+      "max_defect_mass_kg": 2.7069365415854918e-08
+    },
+    {
+      "nodes": 300,
+      "fuel_kg": 2316.578149955232,
+      "final_speed_kn": 336.6776087803367,
+      "termination": "optimal",
+      "max_defect_distance_m": 2.6693669497035444e-10,
+      "max_defect_speed_m_s": 2.8051719391797292e-08,
+      "max_defect_mass_kg": 1.6993489282413066e-08
+    }
+  ]
+}

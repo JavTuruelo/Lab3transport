@@ -1,0 +1,8 @@
+name: optimal-control
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pyomo
+  - ipopt
+  - matplotlib-base

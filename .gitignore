@@ -1,0 +1,22 @@
+# Local environments and package caches (at any folder depth)
+.conda/
+.conda-env/
+.conda-pkgs/
+.venv/
+venv/
+
+# Generated Python caches and local tooling
+__pycache__/
+*.py[cod]
+.vscode/
+.git/
+tmp/
+codex-reset/
+
+# Local credentials and OS files
+.env
+.env.*
+!.env.example
+.aws/
+Thumbs.db
+.DS_Store
