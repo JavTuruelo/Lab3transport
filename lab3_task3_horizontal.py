@@ -48,9 +48,7 @@ gamma_air = 1.4
 S = aircraft['S']
 a0 = math.sqrt(gamma_air * R * 288.15)
 
-# BADA formulas, without the optional cruise fuel/thrust corrections.
 def temperature(h):
-    # Continuous ISA through the 11 km tropopause (smooth transition over ~2 m).
     below_tropopause = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
     return 288.15 - 0.0065 * below_tropopause
 
