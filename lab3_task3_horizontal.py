@@ -1,86 +1,32 @@
-"""Task 3: horizontal spherical-Earth A320 trajectory at FL380.
+"""Task 3: horizontal spherical-Earth A320 trajectory at FL380 (main script).
 Run: python lab3_task3_horizontal.py
 Hermite-Simpson collocation with linear control interpolation; minimum fuel at a fixed common arrival time.
 Approximate Madrid-Barajas / Paris-CDG coordinates are editable modelling
 inputs. They locate the horizontal endpoints only: no airport climb/descent.
 Heading chi is measured from EAST towards NORTH, as in the lab equations.
 The heading equation follows the statement exactly (no added transport term).
+
+Structure:
+  lab3_task3_functions.py  aircraft data, constants and auxiliary functions
+  lab3_task3_rules.py      Pyomo constraint/objective rules
+  lab3_task3_horizontal.py settings, geometry, model building, solve, outputs
 """
 import csv
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 import pyomo.environ as pyo
 
-aircraft = {
-    'm_ref': 64000.0,
-    'CM16': 0.0,
-    'V_MO_kn': 350.0,
-    'C_f1': 0.75882,
-    'C_f2': 2938.5,
-    'C_f3': 8.9418,
-    'C_f4': 93865.0,
-    'G_t': -313.6,
-    'G_w': 0.4325,
-    'CD0_CR': 0.026659,
-    'h_MO_ft': 41000.0,
-    'Clbo_M0': 1.4041,
-    'Vstall_CR_kn': 140.5,
-    'K': 0.79242,
-    'h_max_ft': 33295.0,
-    'S': 122.6,
-    'm_max': 77000.0,
-    'M_MO': 0.82,
-    'C_tc4': 10.138,
-    'C_tc5': 0.008871,
-    'C_tc2': 51680.0,
-    'C_tc3': 5.6809e-11,
-    'C_tc1': 142310.0,
-    'm_min': 39000.0,
-    'CD2_CR': 0.038726,
-    'm_pyld': 21500.0,
-}
-
-knots_to_ms = 1852.0 / 3600.0
-g = 9.80665
-R = 287.05287
-gamma_air = 1.4
-S = aircraft['S']
-a0 = math.sqrt(gamma_air * R * 288.15)
-
-def temperature(h):
-    below_tropopause = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
-    return 288.15 - 0.0065 * below_tropopause
+import lab3_task3_rules as rules
+from lab3_task3_functions import (
+    R, Re, aircraft, air_pressure, gamma_air, knots_to_ms, maximum_thrust,
+    temperature,
+)
 
 
-def air_pressure(h):
-    lower_h = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
-    temp = 288.15 - 0.0065 * lower_h
-    return 101325 * (temp / 288.15)**(g / (R * 0.0065)) * pyo.exp(-g * (h - lower_h) / (R * 216.65))
-
-
-def eta(V):
-    return aircraft['C_f1'] / 60000 * (1 + V / knots_to_ms / aircraft['C_f2'])
-
-
-def maximum_thrust(h):
-    altitude_ft = h / 0.3048
-    return aircraft['C_tc1'] * (1 - altitude_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * altitude_ft**2)
-
-
-def minimum_fuel(h):
-    return aircraft['C_f3'] / 60 * (1 - h / 0.3048 / aircraft['C_f4'])
-
-
-def calibrated_speed(V, h):
-    sound_squared = gamma_air * R * temperature(h)
-    impact = air_pressure(h) * ((1 + 0.2 * V**2 / sound_squared)**3.5 - 1)
-    return a0 * pyo.sqrt(5 * ((1 + impact / 101325)**(2 / 7) - 1))
-
-
-# 1. Settings and explicitly chosen boundary conditions
-N = 100  # endpoint nodes; midpoint stages are additional
-Re = 6_371_000.0
+# Datos de la geometria (paris, madrid)
+N = 100
 start_lat_deg, start_lon_deg = 40.472, -3.561
 end_lat_deg, end_lon_deg = 49.010, 2.548
 h = 38000 * 0.3048
@@ -103,12 +49,15 @@ a = [math.cos(lat0)*math.cos(lon0), math.cos(lat0)*math.sin(lon0), math.sin(lat0
 b = [math.cos(latf)*math.cos(lonf), math.cos(latf)*math.sin(lonf), math.sin(latf)]
 angle = math.acos(max(-1.0, min(1.0, sum(x*y for x, y in zip(a, b)))))
 great_circle_distance = Re * angle
-final_time = great_circle_distance / 212.766  # same fixed time in every wind case
-n = 2 * (N - 1)  # endpoint and midpoint stages
+final_time = great_circle_distance / 212.766  
+n = 2 * (N - 1) 
 step = final_time / n
-# Spherical linear interpolation gives the exact orthodromic reference.
+
 reference_lon = []
 reference_lat = []
+
+# Ortodromica Madrid Paris
+
 for i in range(n+1):
     f = i / n
     vector = [(math.sin((1-f)*angle)*a[j] + math.sin(f*angle)*b[j]) / math.sin(angle) for j in range(3)]
@@ -119,20 +68,6 @@ normal_length = math.sqrt(sum(v*v for v in normal))
 normal = [v/normal_length for v in normal]
 rho = pyo.value(air_pressure(h) / (R * temperature(h)))
 sound = math.sqrt(gamma_air * R * pyo.value(temperature(h)))
-
-
-def drag(V, mass, bank):
-    qS = 0.5 * rho * V**2 * S
-    lift = mass * g / pyo.cos(bank)
-    return qS * aircraft['CD0_CR'] + aircraft['CD2_CR'] * lift**2 / qS
-
-
-def rates(model, i):
-    return ((model.V[i]*pyo.cos(model.chi[i])+wx)/(Re*pyo.cos(model.lat[i])),
-            (model.V[i]*pyo.sin(model.chi[i])+wy)/Re,
-            (model.thrust[i]-drag(model.V[i],model.mass[i],model.bank[i]))/model.mass[i],
-            g*pyo.tan(model.bank[i])/model.V[i],
-            -model.thrust[i]*eta(model.V[i]))
 
 
 solver = pyo.SolverFactory('ipopt')
@@ -172,158 +107,46 @@ for case in cases:
         model.chi[i].value = math.atan2(north-wy, east-wx)
         model.V[i].value = min(aircraft['M_MO']*sound, math.hypot(east-wx, north-wy))
 
-    # Hermite-Simpson: even indices are endpoints; odd indices are midpoints.
-    # N is the number of endpoint nodes, giving 2*N-1 total stages.
-    def longitude_dynamics_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[0]
-        f_mid = rates(model, middle)[0]
-        f_right = rates(model, right)[0]
-        return model.lon[right]-model.lon[left] == final_time/(3*n)*(f_left+4*f_mid+f_right)
 
-    model.longitude_dynamics = pyo.Constraint(model.I, rule=longitude_dynamics_rule)
+    # Datos del caso que leen las rules (lab3_task3_rules.py)
+    model.params = SimpleNamespace(
+        final_time=final_time, n=n, h=h, rho=rho, sound=sound,
+        wx=wx, wy=wy, lon0=lon0, lonf=lonf, lat0=lat0, latf=latf,
+        V0=V0, mass0=mass0,
+    )
 
-    def midpoint_lon_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[0]
-        f_right = rates(model, right)[0]
-        return model.lon[middle] == (model.lon[left]+model.lon[right])/2+final_time/(4*n)*(f_left-f_right)
+    # Dinamica (Hermite-Simpson)
+    model.longitude_dynamics = pyo.Constraint(model.I, rule=rules.longitude_dynamics_rule)
+    model.midpoint_lon = pyo.Constraint(model.I, rule=rules.midpoint_lon_rule)
+    model.latitude_dynamics = pyo.Constraint(model.I, rule=rules.latitude_dynamics_rule)
+    model.midpoint_lat = pyo.Constraint(model.I, rule=rules.midpoint_lat_rule)
+    model.speed_dynamics = pyo.Constraint(model.I, rule=rules.speed_dynamics_rule)
+    model.midpoint_V = pyo.Constraint(model.I, rule=rules.midpoint_V_rule)
+    model.heading_dynamics = pyo.Constraint(model.I, rule=rules.heading_dynamics_rule)
+    model.midpoint_chi = pyo.Constraint(model.I, rule=rules.midpoint_chi_rule)
+    model.mass_dynamics = pyo.Constraint(model.I, rule=rules.mass_dynamics_rule)
+    model.midpoint_mass = pyo.Constraint(model.I, rule=rules.midpoint_mass_rule)
 
-    model.midpoint_lon = pyo.Constraint(model.I, rule=midpoint_lon_rule)
+    # Controles
+    model.midpoint_thrust = pyo.Constraint(model.I, rule=rules.midpoint_thrust_rule)
+    model.midpoint_bank = pyo.Constraint(model.I, rule=rules.midpoint_bank_rule)
 
-    def latitude_dynamics_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[1]
-        f_mid = rates(model, middle)[1]
-        f_right = rates(model, right)[1]
-        return model.lat[right]-model.lat[left] == final_time/(3*n)*(f_left+4*f_mid+f_right)
+    # Envolvente de vuelo
+    model.minimum_thrust = pyo.Constraint(model.N, rule=rules.minimum_thrust_rule)
+    model.maximum_speed = pyo.Constraint(model.N, rule=rules.maximum_speed_rule)
+    model.minimum_speed = pyo.Constraint(model.N, rule=rules.minimum_speed_rule)
+    model.buffet = pyo.Constraint(model.N, rule=rules.buffet_rule)
 
-    model.latitude_dynamics = pyo.Constraint(model.I, rule=latitude_dynamics_rule)
+    # Condiciones de contorno
+    model.initial_longitude = pyo.Constraint(rule=rules.initial_longitude_rule)
+    model.final_longitude = pyo.Constraint(rule=rules.final_longitude_rule)
+    model.initial_latitude = pyo.Constraint(rule=rules.initial_latitude_rule)
+    model.final_latitude = pyo.Constraint(rule=rules.final_latitude_rule)
+    model.initial_speed = pyo.Constraint(rule=rules.initial_speed_rule)
+    model.initial_mass = pyo.Constraint(rule=rules.initial_mass_rule)
 
-    def midpoint_lat_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[1]
-        f_right = rates(model, right)[1]
-        return model.lat[middle] == (model.lat[left]+model.lat[right])/2+final_time/(4*n)*(f_left-f_right)
-
-    model.midpoint_lat = pyo.Constraint(model.I, rule=midpoint_lat_rule)
-
-    def speed_dynamics_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[2]
-        f_mid = rates(model, middle)[2]
-        f_right = rates(model, right)[2]
-        return model.V[right]-model.V[left] == final_time/(3*n)*(f_left+4*f_mid+f_right)
-
-    model.speed_dynamics = pyo.Constraint(model.I, rule=speed_dynamics_rule)
-
-    def midpoint_V_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[2]
-        f_right = rates(model, right)[2]
-        return model.V[middle] == (model.V[left]+model.V[right])/2+final_time/(4*n)*(f_left-f_right)
-
-    model.midpoint_V = pyo.Constraint(model.I, rule=midpoint_V_rule)
-
-    def heading_dynamics_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[3]
-        f_mid = rates(model, middle)[3]
-        f_right = rates(model, right)[3]
-        return model.chi[right]-model.chi[left] == final_time/(3*n)*(f_left+4*f_mid+f_right)
-
-    model.heading_dynamics = pyo.Constraint(model.I, rule=heading_dynamics_rule)
-
-    def midpoint_chi_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[3]
-        f_right = rates(model, right)[3]
-        return model.chi[middle] == (model.chi[left]+model.chi[right])/2+final_time/(4*n)*(f_left-f_right)
-
-    model.midpoint_chi = pyo.Constraint(model.I, rule=midpoint_chi_rule)
-
-    def mass_dynamics_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[4]
-        f_mid = rates(model, middle)[4]
-        f_right = rates(model, right)[4]
-        return model.mass[right]-model.mass[left] == final_time/(3*n)*(f_left+4*f_mid+f_right)
-
-    model.mass_dynamics = pyo.Constraint(model.I, rule=mass_dynamics_rule)
-
-    def midpoint_mass_rule(model, i):
-        left, middle, right = 2*i, 2*i+1, 2*i+2
-        f_left = rates(model, left)[4]
-        f_right = rates(model, right)[4]
-        return model.mass[middle] == (model.mass[left]+model.mass[right])/2+final_time/(4*n)*(f_left-f_right)
-
-    model.midpoint_mass = pyo.Constraint(model.I, rule=midpoint_mass_rule)
-
-    def midpoint_thrust_rule(model, i):
-        return model.thrust[2*i+1] == (model.thrust[2*i]+model.thrust[2*i+2])/2
-
-    model.midpoint_thrust = pyo.Constraint(model.I, rule=midpoint_thrust_rule)
-
-    def midpoint_bank_rule(model, i):
-        return model.bank[2*i+1] == (model.bank[2*i]+model.bank[2*i+2])/2
-
-    model.midpoint_bank = pyo.Constraint(model.I, rule=midpoint_bank_rule)
-
-    def minimum_thrust_rule(model, i):
-        return model.thrust[i]*eta(model.V[i]) >= minimum_fuel(h)
-
-    model.minimum_thrust = pyo.Constraint(model.N, rule=minimum_thrust_rule)
-
-    def maximum_speed_rule(model, i):
-        return calibrated_speed(model.V[i], h)/knots_to_ms <= aircraft['V_MO_kn']
-
-    model.maximum_speed = pyo.Constraint(model.N, rule=maximum_speed_rule)
-
-    def minimum_speed_rule(model, i):
-        return calibrated_speed(model.V[i], h)/knots_to_ms >= 1.3*aircraft['Vstall_CR_kn']*pyo.sqrt(model.mass[i]/aircraft['m_ref']/pyo.cos(model.bank[i]))
-
-    model.minimum_speed = pyo.Constraint(model.N, rule=minimum_speed_rule)
-
-    def buffet_rule(model, i):
-        mach = model.V[i]/sound
-        return aircraft['Clbo_M0']*mach**2-aircraft['K']*mach**3 >= model.mass[i]*g/(pyo.cos(model.bank[i])*0.583*air_pressure(h)*S)
-
-    model.buffet = pyo.Constraint(model.N, rule=buffet_rule)
-
-    def initial_longitude_rule(model):
-        return model.lon[0] == lon0
-
-    model.initial_longitude = pyo.Constraint(rule=initial_longitude_rule)
-
-    def final_longitude_rule(model):
-        return model.lon[n] == lonf
-
-    model.final_longitude = pyo.Constraint(rule=final_longitude_rule)
-
-    def initial_latitude_rule(model):
-        return model.lat[0] == lat0
-
-    model.initial_latitude = pyo.Constraint(rule=initial_latitude_rule)
-
-    def final_latitude_rule(model):
-        return model.lat[n] == latf
-
-    model.final_latitude = pyo.Constraint(rule=final_latitude_rule)
-
-    def initial_speed_rule(model):
-        return model.V[0] == V0
-
-    model.initial_speed = pyo.Constraint(rule=initial_speed_rule)
-
-    def initial_mass_rule(model):
-        return model.mass[0] == mass0
-
-    model.initial_mass = pyo.Constraint(rule=initial_mass_rule)
-
-    def objective_rule(model):
-        return mass0 - model.mass[n]
-
-    model.obj = pyo.Objective(rule=objective_rule, sense=pyo.minimize)
+    # Objetivo: minimo combustible
+    model.obj = pyo.Objective(rule=rules.objective_rule, sense=pyo.minimize)
     model.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
     for var, scale in [(model.lon, 10), (model.lat, 10), (model.chi, 1), (model.bank, 1), (model.V, 1e-2), (model.mass, 1e-4), (model.thrust, 1e-4)]:
         for i in model.N:
