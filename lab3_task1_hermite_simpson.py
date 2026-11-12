@@ -4,7 +4,6 @@ Change the flight conditions and output settings below directly.
 Thrust and fuel flow follow the lab equations without cruise corrections.
 """
 
-import csv
 import json
 import math
 from pathlib import Path
@@ -25,6 +24,10 @@ h = h_ft * 0.3048               # m
 # Output settings
 final_speed_kn = None           # None leaves final speed free
 use_scaling = False             # Enable the original manual IPOPT scaling
+# Disable one limit at a time for sensitivity runs.
+enforce_max_thrust = True
+enforce_min_thrust = True
+enforce_acceleration_limit = True
 show_solver = False
 show_plots = True
 make_plots = True               # Set False if Matplotlib is not installed
@@ -152,9 +155,15 @@ if not solver.available(exception_flag=False):
 solver.options['max_iter'] = 3000
 solver.options['tol'] = 1e-8
 solver.options['nlp_scaling_method'] = 'user-scaling' if use_scaling else 'none'
-output_folder.mkdir(parents=True, exist_ok=True)
 summaries = []
 profiles = []
+
+settings = {'nodes': N_values, 'tf_s': final_time, 'distance_m': final_distance,
+            'altitude_ft': h_ft, 'initial_mass_kg': initial_mass,
+            'initial_speed_m_s': initial_speed, 'final_speed_kn': final_speed_kn,
+            'enforce_max_thrust': enforce_max_thrust, 'enforce_min_thrust': enforce_min_thrust,
+            'enforce_acceleration_limit': enforce_acceleration_limit, 'use_scaling': use_scaling}
+print(json.dumps(settings, indent=2))
 
 for N in N_values:
 
@@ -168,13 +177,13 @@ for N in N_values:
     model.x      = pyo.Var(model.N, bounds=(0, final_distance), initialize=0)
     model.V      = pyo.Var(model.N, bounds=(10, aircraft['M_MO'] * sound_speed), initialize=final_distance / final_time)
     model.mass   = pyo.Var(model.N, bounds=(mass_min, initial_mass), initialize=initial_mass)
-    model.thrust = pyo.Var(model.N, bounds=(0, Tmax), initialize=min(Tmax, drag(final_distance / final_time, initial_mass)))
+    model.thrust = pyo.Var(model.N, bounds=(0, Tmax if enforce_max_thrust else None), initialize=min(Tmax, drag(final_distance / final_time, initial_mass)))
     
     for i in model.N:
         model.x[i].value = final_distance * i / n
 
     # 5. Hermite-Simpson: interpolate states and optimize midpoint thrust.
-    model.thrust_mid = pyo.Var(model.Ns, bounds=(0, Tmax), initialize=min(Tmax, drag(final_distance / final_time, initial_mass)))
+    model.thrust_mid = pyo.Var(model.Ns, bounds=(0, Tmax if enforce_max_thrust else None), initialize=min(Tmax, drag(final_distance / final_time, initial_mass)))
 
     def midpoint_distance(model, i):
         return (model.x[i] + model.x[i+1]) / 2 + step / 8 * (model.V[i] - model.V[i+1])
@@ -220,13 +229,15 @@ for N in N_values:
     def longitudinal_acceleration_from_mid_rule(model, i):
         return model.V[i + 1] - midpoint_speed(model, i) <= a_l_max * (step / 2)
 
-    model.longitudinal_acceleration_to_mid = pyo.Constraint(model.Ns, rule=longitudinal_acceleration_to_mid_rule)
-    model.longitudinal_acceleration_from_mid = pyo.Constraint(model.Ns, rule=longitudinal_acceleration_from_mid_rule)
+    if enforce_acceleration_limit:
+        model.longitudinal_acceleration_to_mid = pyo.Constraint(model.Ns, rule=longitudinal_acceleration_to_mid_rule)
+        model.longitudinal_acceleration_from_mid = pyo.Constraint(model.Ns, rule=longitudinal_acceleration_from_mid_rule)
 
     def minimum_thrust_rule(model, i):
         return model.thrust[i] * eta(model.V[i]) >= minimum_fuel_flow
 
-    model.minimum_thrust = pyo.Constraint(model.N, rule=minimum_thrust_rule)
+    if enforce_min_thrust:
+        model.minimum_thrust = pyo.Constraint(model.N, rule=minimum_thrust_rule)
 
     def maximum_speed_rule(model, i):
         return calibrated_speed(model.V[i]) / knots_to_ms <= aircraft['V_MO_kn']
@@ -263,7 +274,8 @@ for N in N_values:
     def minimum_thrust_mid_rule(model, i):
         return model.thrust_mid[i] * eta(midpoint_speed(model, i)) >= minimum_fuel_flow
 
-    model.minimum_thrust_mid = pyo.Constraint(model.Ns, rule=minimum_thrust_mid_rule)
+    if enforce_min_thrust:
+        model.minimum_thrust_mid = pyo.Constraint(model.Ns, rule=minimum_thrust_mid_rule)
 
     def maximum_speed_mid_rule(model, i):
         return calibrated_speed(midpoint_speed(model, i)) / knots_to_ms <= aircraft['V_MO_kn']
@@ -353,13 +365,12 @@ for N in N_values:
     results = solver.solve(model, tee=show_solver)
     pyo.assert_optimal_termination(results)
 
-    # 9. Extract results and save the trajectory
+    # 9. Summarize the solution and collect plot data
     time        = [i * step for i in model.N]
     distance    = [pyo.value(model.x[i]) for i in model.N]
     speed       = [pyo.value(model.V[i]) for i in model.N]
     mass        = [pyo.value(model.mass[i]) for i in model.N]
     thrust      = [pyo.value(model.thrust[i]) for i in model.N]
-    fuel_flow   = [thrust[i] * eta(speed[i]) for i in model.N]
     fuel_burned = pyo.value(model.obj)
 
     summary = {'nodes': N, 'fuel_kg': fuel_burned,
@@ -373,37 +384,28 @@ for N in N_values:
         
         summary['max_defect_' + name] = max(abs(pyo.value(c.body - c.lower)) for c in component.values())
 
-    # Include midpoint stages in CSV and plots, especially the thrust control.
+    # Include midpoint stages in the plots, especially the thrust control.
     samples = []
     for i in model.N:
-        samples.append((i * step, distance[i], speed[i], mass[i], thrust[i], fuel_flow[i]))
+        samples.append((i * step, distance[i], speed[i], mass[i], thrust[i]))
     for i in model.Ns:
         vm = pyo.value(midpoint_speed(model, i))
         tm = pyo.value(model.thrust_mid[i])
         samples.append(((i + 0.5) * step, pyo.value(midpoint_distance(model, i)), vm,
-                        pyo.value(midpoint_mass(model, i)), tm, tm * eta(vm)))
+                        pyo.value(midpoint_mass(model, i)), tm))
     samples.sort()
-    time, distance, speed, mass, thrust, fuel_flow = map(list, zip(*samples))
+    time, distance, speed, mass, thrust = map(list, zip(*samples))
 
     summaries.append(summary)
     profiles.append((N, time, distance, speed, mass, thrust))
     print(json.dumps(summary, indent=2))
 
-    with (output_folder / f'trajectory_N{N}.csv').open('w', newline='') as file:
-
-        writer = csv.writer(file)
-        writer.writerow(['time_s', 'distance_m', 'TAS_m_s', 'mass_kg', 'thrust_N', 'fuel_flow_kg_s'])
-        writer.writerows(zip(time, distance, speed, mass, thrust, fuel_flow))
-
-settings = {'nodes': N_values, 'tf_s': final_time, 'distance_m': final_distance,
-            'altitude_ft': h_ft, 'initial_mass_kg': initial_mass,
-            'initial_speed_m_s': initial_speed, 'final_speed_kn': final_speed_kn}
-
-(output_folder / 'summary.json').write_text(json.dumps({'settings': settings, 'results': summaries}, indent=2), encoding='utf-8')
 
 # 10. Plot profiles and mesh convergence; NumPy is not needed.
 if make_plots:
     import matplotlib.pyplot as plt
+
+    output_folder.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(2, 2, figsize=(11, 7), sharex=True)
     for N, time, distance, speed, mass, thrust in profiles:
         axes[0, 0].plot(time, [x / 1000 for x in distance], label=f'{N} nodes')
