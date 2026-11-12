@@ -24,6 +24,7 @@ h = h_ft * 0.3048               # m
 
 # Output settings
 final_speed_kn = None           # None leaves final speed free
+use_scaling = False             # Enable the original manual IPOPT scaling
 show_solver = False
 show_plots = True
 make_plots = True               # Set False if Matplotlib is not installed
@@ -79,24 +80,46 @@ gamma = 1.4
 if not 0 <= h <= 20000:
     raise ValueError('This ISA implementation supports altitudes from 0 to 20 km.')
 
-air_temperature = 288.15 - 0.0065 * min(h, 11000)
-pressure = 101325 * (air_temperature / 288.15)**(g / (R * 0.0065))
+T0 = 288.15
+p0 = 101325
+beta_T = -0.0065
+h_trop = 11000
+T_isa_trop = T0 + beta_T * h_trop  # BADA (3.1-14)
 
-if h > 11000:
-    pressure *= math.exp(-g * (h - 11000) / (R * air_temperature))
+# Temperature for ISA (delta T = 0), BADA (3.1-13) and (3.1-16).
+if h <= h_trop:
+    air_temperature = T0 + beta_T * h
+else:
+    air_temperature = T_isa_trop
+
+# Pressure, BADA (3.1-18) to (3.1-20).
+if h <= h_trop:
+    pressure = p0 * (air_temperature / T0)**(-g / (beta_T * R))
+else:
+    p_trop = p0 * (T_isa_trop / T0)**(-g / (beta_T * R))
+    pressure = p_trop * math.exp(-g * (h - h_trop) / (R * T_isa_trop))
 
 rho = pressure / (R * air_temperature)
 sound_speed = math.sqrt(gamma * R * air_temperature)
-a0 = math.sqrt(gamma * R * 288.15)
+rho0 = p0 / (R * T0)
 
-maximum_altitude = min(aircraft['h_MO_ft'], aircraft['h_max_ft']
-                       + aircraft['G_w'] * (mass_max - initial_mass))
+# BADA (3.5-1): check the ceiling at the initial mass under ISA.
+delta_T = 0.0
+maximum_altitude = aircraft['h_MO_ft']
+if aircraft['h_max_ft'] != 0:
+    altitude_temperature_correction = aircraft['G_t'] * max(0.0, delta_T - aircraft['C_tc4'])
+    maximum_altitude = min(
+        aircraft['h_MO_ft'],
+        aircraft['h_max_ft'] + altitude_temperature_correction
+        + aircraft['G_w'] * (mass_max - initial_mass),
+    )
 
 if not mass_min <= initial_mass <= mass_max or h_ft > maximum_altitude:
     raise ValueError('Initial mass/altitude is outside the BADA ISA envelope.')
 
 Tmax = aircraft['C_tc1'] * (1 - h_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * h_ft**2)
 minimum_fuel_flow = Cf3 / 60 * (1 - h_ft / Cf4)
+a_l_max = 2.0 * 0.3048  # BADA section 5.2, ft/s^2 to m/s^2
 
 
 
@@ -112,10 +135,14 @@ def eta(V):
     return Cf1 / 60000 * (1 + (V / knots_to_ms) / Cf2)
 
 
-def calibrated_speed(V):
-    # Compressible TAS -> CAS conversion, in m/s.
-    impact_pressure = pressure * ((1 + 0.2 * (V / sound_speed)**2)**3.5 - 1)
-    return a0 * (5 * ((1 + impact_pressure / 101325)**(2 / 7) - 1))**0.5
+def calibrated_speed(V_TAS):
+    # BADA (3.1-24) and (3.1-25). Both speeds are in m/s.
+    p = pressure
+    mu = (gamma - 1) / gamma
+    return (
+        (2 * p0 / (mu * rho0))
+        * ((1 + (p / p0) * ((1 + (mu * rho / (2 * p)) * V_TAS**2)**(1 / mu) - 1))**mu - 1)
+    )**(1 / 2)
 
 
 # 4. Build and solve one model for each requested mesh
@@ -124,7 +151,7 @@ if not solver.available(exception_flag=False):
     raise RuntimeError('IPOPT unavailable. Activate the Conda lab environment.')
 solver.options['max_iter'] = 3000
 solver.options['tol'] = 1e-8
-solver.options['nlp_scaling_method'] = 'user-scaling'
+solver.options['nlp_scaling_method'] = 'user-scaling' if use_scaling else 'none'
 output_folder.mkdir(parents=True, exist_ok=True)
 summaries = []
 profiles = []
@@ -146,42 +173,32 @@ for N in N_values:
     for i in model.N:
         model.x[i].value = final_distance * i / n
 
-    # 5. Hermite-Simpson: independent midpoint control and Hermite states.
-    # N counts endpoint nodes; there are N-1 additional midpoint stages.
-    model.x_mid = pyo.Var(model.Ns, bounds=(0, final_distance), initialize=0)
-    model.V_mid = pyo.Var(model.Ns, bounds=(10, aircraft['M_MO'] * sound_speed), initialize=final_distance / final_time)
-    model.mass_mid = pyo.Var(model.Ns, bounds=(mass_min, initial_mass), initialize=initial_mass)
+    # 5. Hermite-Simpson: interpolate states and optimize midpoint thrust.
     model.thrust_mid = pyo.Var(model.Ns, bounds=(0, Tmax), initialize=min(Tmax, drag(final_distance / final_time, initial_mass)))
-    for i in model.Ns:
-        model.x_mid[i].value = final_distance * (i + 0.5) / n
 
-    def midpoint_distance_rule(model, i):
-        return model.x_mid[i] == (model.x[i] + model.x[i+1]) / 2 + step / 8 * (model.V[i] - model.V[i+1])
+    def midpoint_distance(model, i):
+        return (model.x[i] + model.x[i+1]) / 2 + step / 8 * (model.V[i] - model.V[i+1])
 
-    model.midpoint_distance = pyo.Constraint(model.Ns, rule=midpoint_distance_rule)
-
-    def midpoint_speed_rule(model, i):
+    def midpoint_speed(model, i):
         acceleration_i = (model.thrust[i] - drag(model.V[i], model.mass[i])) / model.mass[i]
         acceleration_next = (model.thrust[i+1] - drag(model.V[i+1], model.mass[i+1])) / model.mass[i+1]
-        return model.V_mid[i] == (model.V[i] + model.V[i+1]) / 2 + step / 8 * (acceleration_i - acceleration_next)
+        return (model.V[i] + model.V[i+1]) / 2 + step / 8 * (acceleration_i - acceleration_next)
 
-    model.midpoint_speed = pyo.Constraint(model.Ns, rule=midpoint_speed_rule)
-
-    def midpoint_mass_rule(model, i):
+    def midpoint_mass(model, i):
         fuel_i = model.thrust[i] * eta(model.V[i])
         fuel_next = model.thrust[i+1] * eta(model.V[i+1])
-        return model.mass_mid[i] == (model.mass[i] + model.mass[i+1]) / 2 + step / 8 * (-fuel_i + fuel_next)
-
-    model.midpoint_mass = pyo.Constraint(model.Ns, rule=midpoint_mass_rule)
+        return (model.mass[i] + model.mass[i+1]) / 2 + step / 8 * (-fuel_i + fuel_next)
 
     def distance_rule(model, i):
-        return model.x[i+1] - model.x[i] == step / 6 * (model.V[i] + 4 * model.V_mid[i] + model.V[i+1])
+        return model.x[i+1] - model.x[i] == step / 6 * (model.V[i] + 4 * midpoint_speed(model, i) + model.V[i+1])
 
     model.distance_dynamics = pyo.Constraint(model.Ns, rule=distance_rule)
 
     def speed_rule(model, i):
         acceleration_i = (model.thrust[i] - drag(model.V[i], model.mass[i])) / model.mass[i]
-        acceleration_mid = (model.thrust_mid[i] - drag(model.V_mid[i], model.mass_mid[i])) / model.mass_mid[i]
+        speed_mid = midpoint_speed(model, i)
+        mass_mid = midpoint_mass(model, i)
+        acceleration_mid = (model.thrust_mid[i] - drag(speed_mid, mass_mid)) / mass_mid
         acceleration_next = (model.thrust[i+1] - drag(model.V[i+1], model.mass[i+1])) / model.mass[i+1]
         return model.V[i+1] - model.V[i] == step / 6 * (acceleration_i + 4 * acceleration_mid + acceleration_next)
 
@@ -189,13 +206,23 @@ for N in N_values:
 
     def mass_rule(model, i):
         fuel_i = model.thrust[i] * eta(model.V[i])
-        fuel_mid = model.thrust_mid[i] * eta(model.V_mid[i])
+        fuel_mid = model.thrust_mid[i] * eta(midpoint_speed(model, i))
         fuel_next = model.thrust[i+1] * eta(model.V[i+1])
         return model.mass[i+1] - model.mass[i] == -step / 6 * (fuel_i + 4 * fuel_mid + fuel_next)
 
     model.mass_dynamics = pyo.Constraint(model.Ns, rule=mass_rule)
 
     # 6. Path constraints (Mach and maximum thrust are variable bounds)
+    # BADA (5.2-1): consecutive stages are half a time step apart.
+    def longitudinal_acceleration_to_mid_rule(model, i):
+        return midpoint_speed(model, i) - model.V[i] <= a_l_max * (step / 2)
+
+    def longitudinal_acceleration_from_mid_rule(model, i):
+        return model.V[i + 1] - midpoint_speed(model, i) <= a_l_max * (step / 2)
+
+    model.longitudinal_acceleration_to_mid = pyo.Constraint(model.Ns, rule=longitudinal_acceleration_to_mid_rule)
+    model.longitudinal_acceleration_from_mid = pyo.Constraint(model.Ns, rule=longitudinal_acceleration_from_mid_rule)
+
     def minimum_thrust_rule(model, i):
         return model.thrust[i] * eta(model.V[i]) >= minimum_fuel_flow
 
@@ -220,25 +247,38 @@ for N in N_values:
         model.buffet = pyo.Constraint(model.N, rule=buffet_rule)
 
     # Enforce the same flight envelope at midpoint stages.
+    def midpoint_distance_bounds_rule(model, i):
+        return (0, midpoint_distance(model, i), final_distance)
+
+    def midpoint_speed_bounds_rule(model, i):
+        return (10, midpoint_speed(model, i), aircraft['M_MO'] * sound_speed)
+
+    def midpoint_mass_bounds_rule(model, i):
+        return (mass_min, midpoint_mass(model, i), initial_mass)
+
+    model.midpoint_distance_bounds = pyo.Constraint(model.Ns, rule=midpoint_distance_bounds_rule)
+    model.midpoint_speed_bounds = pyo.Constraint(model.Ns, rule=midpoint_speed_bounds_rule)
+    model.midpoint_mass_bounds = pyo.Constraint(model.Ns, rule=midpoint_mass_bounds_rule)
+
     def minimum_thrust_mid_rule(model, i):
-        return model.thrust_mid[i] * eta(model.V_mid[i]) >= minimum_fuel_flow
+        return model.thrust_mid[i] * eta(midpoint_speed(model, i)) >= minimum_fuel_flow
 
     model.minimum_thrust_mid = pyo.Constraint(model.Ns, rule=minimum_thrust_mid_rule)
 
     def maximum_speed_mid_rule(model, i):
-        return calibrated_speed(model.V_mid[i]) / knots_to_ms <= aircraft['V_MO_kn']
+        return calibrated_speed(midpoint_speed(model, i)) / knots_to_ms <= aircraft['V_MO_kn']
 
     model.maximum_speed_mid = pyo.Constraint(model.Ns, rule=maximum_speed_mid_rule)
 
     def minimum_speed_mid_rule(model, i):
-        stall_limit = 1.3 * aircraft['Vstall_CR_kn'] * (model.mass_mid[i] / mass_ref)**0.5
-        return calibrated_speed(model.V_mid[i]) / knots_to_ms >= stall_limit
+        stall_limit = 1.3 * aircraft['Vstall_CR_kn'] * (midpoint_mass(model, i) / mass_ref)**0.5
+        return calibrated_speed(midpoint_speed(model, i)) / knots_to_ms >= stall_limit
 
     model.minimum_speed_mid = pyo.Constraint(model.Ns, rule=minimum_speed_mid_rule)
 
     def buffet_mid_rule(model, i):
-        mach = model.V_mid[i] / sound_speed
-        return aircraft['Clbo_M0'] * mach**2 - aircraft['K'] * mach**3 >= model.mass_mid[i] * g / (0.583 * pressure * S)
+        mach = midpoint_speed(model, i) / sound_speed
+        return aircraft['Clbo_M0'] * mach**2 - aircraft['K'] * mach**3 >= midpoint_mass(model, i) * g / (0.583 * pressure * S)
 
     if h_ft >= 15000 and aircraft['Clbo_M0'] > 0 and aircraft['K'] > 0:
         model.buffet_mid = pyo.Constraint(model.Ns, rule=buffet_mid_rule)
@@ -276,41 +316,39 @@ for N in N_values:
 
     model.obj = pyo.Objective(rule=objective_rule, sense=pyo.minimize)
 
-    # Numerical scaling keeps the SI formulas above readable.
-    model.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
-    for variable, factor in [(model.x, 1e-6), (model.V, 1e-2), (model.mass, 1e-4), (model.thrust, 1e-4)]:
+    if use_scaling:
+        model.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
+        for variable, factor in [(model.x, 1e-6), (model.V, 1e-2), (model.mass, 1e-4), (model.thrust, 1e-4)]:
 
-        for i in model.N:
+            for i in model.N:
 
-            model.scaling_factor[variable[i]] = factor
+                model.scaling_factor[variable[i]] = factor
 
-    for constraint in model.component_data_objects(pyo.Constraint):
-        model.scaling_factor[constraint] = 1.0
+        for constraint in model.component_data_objects(pyo.Constraint):
+            model.scaling_factor[constraint] = 1.0
 
-    for i in model.Ns:
-
-        model.scaling_factor[model.distance_dynamics[i]] = 1e-6
-        model.scaling_factor[model.speed_dynamics[i]] = 1e-2
-        model.scaling_factor[model.mass_dynamics[i]] = 1e-4
-
-    for variable, factor in [(model.x_mid, 1e-6), (model.V_mid, 1e-2), (model.mass_mid, 1e-4), (model.thrust_mid, 1e-4)]:
         for i in model.Ns:
-            model.scaling_factor[variable[i]] = factor
-    for i in model.Ns:
-        model.scaling_factor[model.midpoint_distance[i]] = 1e-6
-        model.scaling_factor[model.midpoint_speed[i]] = 1e-2
-        model.scaling_factor[model.midpoint_mass[i]] = 1e-4
 
-    model.scaling_factor[model.initial_distance] = 1e-6
-    model.scaling_factor[model.final_distance] = 1e-6
-    model.scaling_factor[model.initial_speed] = 1e-2
-    model.scaling_factor[model.initial_mass] = 1e-4
+            model.scaling_factor[model.distance_dynamics[i]] = 1e-6
+            model.scaling_factor[model.speed_dynamics[i]] = 1e-2
+            model.scaling_factor[model.mass_dynamics[i]] = 1e-4
 
-    if final_speed_kn is not None:
+        for i in model.Ns:
+            model.scaling_factor[model.thrust_mid[i]] = 1e-4
+            model.scaling_factor[model.midpoint_distance_bounds[i]] = 1e-6
+            model.scaling_factor[model.midpoint_speed_bounds[i]] = 1e-2
+            model.scaling_factor[model.midpoint_mass_bounds[i]] = 1e-4
 
-        model.scaling_factor[model.final_speed] = 1e-2
+        model.scaling_factor[model.initial_distance] = 1e-6
+        model.scaling_factor[model.final_distance] = 1e-6
+        model.scaling_factor[model.initial_speed] = 1e-2
+        model.scaling_factor[model.initial_mass] = 1e-4
 
-    model.scaling_factor[model.obj] = 1e-4
+        if final_speed_kn is not None:
+
+            model.scaling_factor[model.final_speed] = 1e-2
+
+        model.scaling_factor[model.obj] = 1e-4
 
     results = solver.solve(model, tee=show_solver)
     pyo.assert_optimal_termination(results)
@@ -335,20 +373,15 @@ for N in N_values:
         
         summary['max_defect_' + name] = max(abs(pyo.value(c.body - c.lower)) for c in component.values())
 
-    for name, component in [('midpoint_distance_m', model.midpoint_distance),
-                             ('midpoint_speed_m_s', model.midpoint_speed),
-                             ('midpoint_mass_kg', model.midpoint_mass)]:
-        summary['max_defect_' + name] = max(abs(pyo.value(c.body - c.lower)) for c in component.values())
-
     # Include midpoint stages in CSV and plots, especially the thrust control.
     samples = []
     for i in model.N:
         samples.append((i * step, distance[i], speed[i], mass[i], thrust[i], fuel_flow[i]))
     for i in model.Ns:
-        vm = pyo.value(model.V_mid[i])
+        vm = pyo.value(midpoint_speed(model, i))
         tm = pyo.value(model.thrust_mid[i])
-        samples.append(((i + 0.5) * step, pyo.value(model.x_mid[i]), vm,
-                        pyo.value(model.mass_mid[i]), tm, tm * eta(vm)))
+        samples.append(((i + 0.5) * step, pyo.value(midpoint_distance(model, i)), vm,
+                        pyo.value(midpoint_mass(model, i)), tm, tm * eta(vm)))
     samples.sort()
     time, distance, speed, mass, thrust, fuel_flow = map(list, zip(*samples))
 

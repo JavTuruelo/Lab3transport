@@ -24,6 +24,7 @@ h = h_ft * 0.3048               # m
 
 # Output settings
 final_speed_kn = None           # None leaves final speed free
+use_scaling = False             # Enable the original manual IPOPT scaling
 show_solver = False
 show_plots = True
 make_plots = True               # Set False if Matplotlib is not installed
@@ -79,44 +80,71 @@ gamma = 1.4
 if not 0 <= h <= 20000:
     raise ValueError('This ISA implementation supports altitudes from 0 to 20 km.')
 
-air_temperature = 288.15 - 0.0065 * min(h, 11000)
-pressure = 101325 * (air_temperature / 288.15)**(g / (R * 0.0065))
+T0 = 288.15
+p0 = 101325
+beta_T = -0.0065
+h_trop = 11000
+T_isa_trop = T0 + beta_T * h_trop  # BADA (3.1-14)
 
-if h > 11000:
-    pressure *= math.exp(-g * (h - 11000) / (R * air_temperature))
+# Temperature for ISA (delta T = 0), BADA (3.1-13) and (3.1-16).
+if h <= h_trop:
+    air_temperature = T0 + beta_T * h
+else:
+    air_temperature = T_isa_trop
+
+# Pressure, BADA (3.1-18) to (3.1-20).
+if h <= h_trop:
+    pressure = p0 * (air_temperature / T0)**(-g / (beta_T * R))
+else:
+    p_trop = p0 * (T_isa_trop / T0)**(-g / (beta_T * R))
+    pressure = p_trop * math.exp(-g * (h - h_trop) / (R * T_isa_trop))
 
 rho = pressure / (R * air_temperature)
 sound_speed = math.sqrt(gamma * R * air_temperature)
-a0 = math.sqrt(gamma * R * 288.15)
+rho0 = p0 / (R * T0)
 
-maximum_altitude = min(aircraft['h_MO_ft'], aircraft['h_max_ft']
-                       + aircraft['G_w'] * (mass_max - initial_mass))
+# BADA (3.5-1): check the ceiling at the initial mass under ISA.
+delta_T = 0.0
+maximum_altitude = aircraft['h_MO_ft']
+if aircraft['h_max_ft'] != 0:
+    altitude_temperature_correction = aircraft['G_t'] * max(0.0, delta_T - aircraft['C_tc4'])
+    maximum_altitude = min(
+        aircraft['h_MO_ft'],
+        aircraft['h_max_ft'] + altitude_temperature_correction
+        + aircraft['G_w'] * (mass_max - initial_mass),
+    )
 
 if not mass_min <= initial_mass <= mass_max or h_ft > maximum_altitude:
     raise ValueError('Initial mass/altitude is outside the BADA ISA envelope.')
 
-Tmax = aircraft['C_tc1'] * (1 - h_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * h_ft**2)
-minimum_fuel_flow = Cf3 / 60 * (1 - h_ft / Cf4)
+# Eq 3.1-24 in BADA 
+def calibrated_speed(V_TAS):
+    # BADA (3.1-24) and (3.1-25). Both speeds are in m/s.
+    p = pressure
+    mu = (gamma - 1) / gamma
+    return (
+        (2 * p0 / (mu * rho0))
+        * ((1 + (p / p0) * ((1 + (mu * rho / (2 * p)) * V_TAS**2)**(1 / mu) - 1))**mu - 1)
+    )**(1 / 2)
 
 
-
-# Only three shared physical formulas need helper functions.
-# These work with both ordinary numbers and Pyomo symbolic variables.
+# (3.6-1), (3.6-2), (3.6-5) from BADA
 def drag(V, mass):
     qS = 0.5 * rho * V**2 * S
     return qS * CD0 + CD2 * (mass * g)**2 / qS
 
+Tmax = aircraft['C_tc1'] * (1 - h_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * h_ft**2)
+minimum_fuel_flow = Cf3 / 60 * (1 - h_ft / Cf4)
+a_l_max = 2.0 * 0.3048  # BADA section 5.2, ft/s^2 to m/s^2
 
+
+
+
+
+# 3.9-1 from BADA
 def eta(V):
     # BADA uses knots; convert kg/(kN min) to kg/(N s).
     return Cf1 / 60000 * (1 + (V / knots_to_ms) / Cf2)
-
-
-def calibrated_speed(V):
-    # Compressible TAS -> CAS conversion, in m/s.
-    impact_pressure = pressure * ((1 + 0.2 * (V / sound_speed)**2)**3.5 - 1)
-    return a0 * (5 * ((1 + impact_pressure / 101325)**(2 / 7) - 1))**0.5
-
 
 # 4. Build and solve one model for each requested mesh
 solver = pyo.SolverFactory('ipopt')
@@ -124,7 +152,7 @@ if not solver.available(exception_flag=False):
     raise RuntimeError('IPOPT unavailable. Activate the Conda lab environment.')
 solver.options['max_iter'] = 3000
 solver.options['tol'] = 1e-8
-solver.options['nlp_scaling_method'] = 'user-scaling'
+solver.options['nlp_scaling_method'] = 'user-scaling' if use_scaling else 'none'
 output_folder.mkdir(parents=True, exist_ok=True)
 summaries = []
 profiles = []
@@ -167,6 +195,12 @@ for N in N_values:
     model.mass_dynamics = pyo.Constraint(model.Ns, rule=mass_rule)
 
     # 6. Path constraints (Mach and maximum thrust are variable bounds)
+    # BADA (5.2-1): limit the TAS increase over each update interval.
+    def longitudinal_acceleration_rule(model, i):
+        return model.V[i + 1] - model.V[i] <= a_l_max * step
+
+    model.longitudinal_acceleration = pyo.Constraint(model.Ns, rule=longitudinal_acceleration_rule)
+
     def minimum_thrust_rule(model, i):
         return model.thrust[i] * eta(model.V[i]) >= minimum_fuel_flow
 
@@ -223,33 +257,33 @@ for N in N_values:
 
     model.obj = pyo.Objective(rule=objective_rule, sense=pyo.minimize)
 
-    # Numerical scaling keeps the SI formulas above readable.
-    model.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
-    for variable, factor in [(model.x, 1e-6), (model.V, 1e-2), (model.mass, 1e-4), (model.thrust, 1e-4)]:
+    if use_scaling:
+        model.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
+        for variable, factor in [(model.x, 1e-6), (model.V, 1e-2), (model.mass, 1e-4), (model.thrust, 1e-4)]:
 
-        for i in model.N:
+            for i in model.N:
 
-            model.scaling_factor[variable[i]] = factor
+                model.scaling_factor[variable[i]] = factor
 
-    for constraint in model.component_data_objects(pyo.Constraint):
-        model.scaling_factor[constraint] = 1.0
+        for constraint in model.component_data_objects(pyo.Constraint):
+            model.scaling_factor[constraint] = 1.0
 
-    for i in model.Ns:
+        for i in model.Ns:
 
-        model.scaling_factor[model.distance_dynamics[i]] = 1e-6
-        model.scaling_factor[model.speed_dynamics[i]] = 1e-2
-        model.scaling_factor[model.mass_dynamics[i]] = 1e-4
+            model.scaling_factor[model.distance_dynamics[i]] = 1e-6
+            model.scaling_factor[model.speed_dynamics[i]] = 1e-2
+            model.scaling_factor[model.mass_dynamics[i]] = 1e-4
 
-    model.scaling_factor[model.initial_distance] = 1e-6
-    model.scaling_factor[model.final_distance] = 1e-6
-    model.scaling_factor[model.initial_speed] = 1e-2
-    model.scaling_factor[model.initial_mass] = 1e-4
+        model.scaling_factor[model.initial_distance] = 1e-6
+        model.scaling_factor[model.final_distance] = 1e-6
+        model.scaling_factor[model.initial_speed] = 1e-2
+        model.scaling_factor[model.initial_mass] = 1e-4
 
-    if final_speed_kn is not None:
+        if final_speed_kn is not None:
 
-        model.scaling_factor[model.final_speed] = 1e-2
+            model.scaling_factor[model.final_speed] = 1e-2
 
-    model.scaling_factor[model.obj] = 1e-4
+        model.scaling_factor[model.obj] = 1e-4
 
     results = solver.solve(model, tee=show_solver)
     pyo.assert_optimal_termination(results)
