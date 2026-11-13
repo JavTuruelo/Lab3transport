@@ -9,44 +9,11 @@ import math
 from pathlib import Path
 import pyomo.environ as pyo
 
-aircraft = {
-    'm_ref': 64000.0,
-    'CM16': 0.0,
-    'V_MO_kn': 350.0,
-    'C_f1': 0.75882,
-    'C_f2': 2938.5,
-    'C_f3': 8.9418,
-    'C_f4': 93865.0,
-    'G_t': -313.6,
-    'G_w': 0.4325,
-    'CD0_CR': 0.026659,
-    'h_MO_ft': 41000.0,
-    'Clbo_M0': 1.4041,
-    'Vstall_CR_kn': 140.5,
-    'K': 0.79242,
-    'h_max_ft': 33295.0,
-    'S': 122.6,
-    'm_max': 77000.0,
-    'M_MO': 0.82,
-    'C_tc4': 10.138,
-    'C_tc5': 0.008871,
-    'C_tc2': 51680.0,
-    'C_tc3': 5.6809e-11,
-    'C_tc1': 142310.0,
-    'm_min': 39000.0,
-    'CD2_CR': 0.038726,
-    'm_pyld': 21500.0,
-}
-
-knots_to_ms = 1852.0 / 3600.0
-g = 9.80665
-R = 287.05287
-gamma_air = 1.4
-S = aircraft['S']
-def eta(V):
-    return aircraft['C_f1'] / 60000 * (1 + V / knots_to_ms / aircraft['C_f2'])
-
-
+import lab3_functions as fn
+from lab3_functions import (
+    R, S, aircraft, air_pressure, eta, g, gamma_air, knots_to_ms,
+    maximum_thrust, minimum_fuel, temperature,
+)
 
 # 1. Editable settings
 N = 100  # endpoint nodes; midpoint stages are additional
@@ -73,50 +40,26 @@ output_folder = Path(__file__).resolve().parent / 'results_task2'
 if cost_time_unit not in ('seconds', 'hours'):
     raise ValueError('cost_time_unit must be seconds or hours')
 cost_time_divisor = 3600.0 if cost_time_unit == 'hours' else 1.0
-if not 0 <= h <= 20000:
-    raise ValueError('This ISA implementation supports altitudes from 0 to 20 km.')
 
-T0 = 288.15
-p0 = 101325
-beta_T = -0.0065
-h_trop = 11000
-T_isa_trop = T0 + beta_T * h_trop  # BADA (3.1-14)
-
-# Temperature for ISA (delta T = 0), BADA (3.1-13) and (3.1-16).
-if h <= h_trop:
-    air_temperature = T0 + beta_T * h
-else:
-    air_temperature = T_isa_trop
-
-# Pressure, BADA (3.1-18) to (3.1-20).
-if h <= h_trop:
-    pressure = p0 * (air_temperature / T0)**(-g / (beta_T * R))
-else:
-    p_trop = p0 * (T_isa_trop / T0)**(-g / (beta_T * R))
-    pressure = p_trop * math.exp(-g * (h - h_trop) / (R * T_isa_trop))
-
+air_temperature = temperature(h)  # also checks 0 <= h <= 20 km
+pressure = air_pressure(h)
 rho = pressure / (R * air_temperature)
 sound_speed = math.sqrt(gamma_air * R * air_temperature)
-rho0 = p0 / (R * T0)
 
-Tmax = aircraft['C_tc1'] * (1 - h_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * h_ft**2)
-minimum_fuel_flow = aircraft['C_f3'] / 60 * (1 - h_ft / aircraft['C_f4'])
+Tmax = maximum_thrust(h)
+minimum_fuel_flow = minimum_fuel(h)
 a_l_max = 2.0 * 0.3048  # BADA (5.2-1), converted from ft/s² to m/s².
+
+
+# Altitude is fixed, so wrap the shared functions (wings level: bank = 0).
+def drag(V, mass):
+    # BADA (3.6-1), (3.6-2), (3.6-5)
+    return fn.drag(V, mass, 0.0, rho)
 
 
 def calibrated_speed(V_TAS):
     # BADA (3.1-24) and (3.1-25). Both speeds are in m/s.
-    p = pressure
-    mu = (gamma_air - 1) / gamma_air
-    return (
-        (2 * p0 / (mu * rho0))
-        * ((1 + (p / p0) * ((1 + (mu * rho / (2 * p)) * V_TAS**2)**(1 / mu) - 1))**mu - 1)
-    )**(1 / 2)
-
-
-def drag(V, mass):
-    qS = 0.5 * rho * V**2 * S
-    return qS * aircraft['CD0_CR'] + aircraft['CD2_CR'] * (mass * g)**2 / qS
+    return fn.calibrated_speed(V_TAS, h)
 
 
 solver = pyo.SolverFactory('ipopt')

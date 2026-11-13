@@ -9,12 +9,17 @@ import math
 from pathlib import Path
 import pyomo.environ as pyo
 
+import lab3_functions as fn
+from lab3_functions import (
+    R, S, aircraft, air_pressure, eta, g, gamma_air, knots_to_ms,
+    maximum_thrust, minimum_fuel, temperature,
+)
+
 # Flight conditions
 N_values = [50, 100, 150, 300]                 # Use [50, 100, 150, 300] for convergence
 final_time = 4700.0             # s
 final_distance = 1_000_000.0    # m
 
-knots_to_ms = 1852.0 / 3600.0
 initial_speed = 420.0 * knots_to_ms
 initial_mass = 51000.0          # kg
 
@@ -33,78 +38,15 @@ show_plots = True
 make_plots = True               # Set False if Matplotlib is not installed
 output_folder = Path(__file__).resolve().parent / "results_hermite_simpson"
 
-# 2. A320 coefficients (from the supplied A320 data file)
-# Masses: kg; speeds: knots; altitudes: ft; wing area: m2.
-aircraft = {
-    'm_ref': 64000.0,
-    'CM16': 0.0,
-    'V_MO_kn': 350.0,
-    'C_f1': 0.75882,
-    'C_f2': 2938.5,
-    'C_f3': 8.9418,
-    'C_f4': 93865.0,
-    'G_t': -313.6,
-    'G_w': 0.4325,
-    'CD0_CR': 0.026659,
-    'h_MO_ft': 41000.0,
-    'Clbo_M0': 1.4041,
-    'Vstall_CR_kn': 140.5,
-    'K': 0.79242,
-    'h_max_ft': 33295.0,
-    'S': 122.6,
-    'm_max': 77000.0,
-    'M_MO': 0.82,
-    'C_tc4': 10.138,
-    'C_tc5': 0.008871,
-    'C_tc2': 51680.0,
-    'C_tc3': 5.6809e-11,
-    'C_tc1': 142310.0,
-    'm_min': 39000.0,
-    'CD2_CR': 0.038726,
-    'm_pyld': 21500.0,
-}
-
-S = aircraft['S']
-CD0 = aircraft['CD0_CR']
-CD2 = aircraft['CD2_CR']
-Cf1 = aircraft['C_f1']
-Cf2 = aircraft['C_f2']
-Cf3 = aircraft['C_f3']
-Cf4 = aircraft['C_f4']
+# 2-3. A320 data, ISA atmosphere and BADA formulas: lab3_functions.py
 mass_min = aircraft['m_min']
 mass_max = aircraft['m_max']
 mass_ref = aircraft['m_ref']
 
-# 3. ISA atmosphere at the fixed pressure altitude (including above tropopause)
-g = 9.80665
-R = 287.05287
-gamma = 1.4
-
-if not 0 <= h <= 20000:
-    raise ValueError('This ISA implementation supports altitudes from 0 to 20 km.')
-
-T0 = 288.15
-p0 = 101325
-beta_T = -0.0065
-h_trop = 11000
-T_isa_trop = T0 + beta_T * h_trop  # BADA (3.1-14)
-
-# Temperature for ISA (delta T = 0), BADA (3.1-13) and (3.1-16).
-if h <= h_trop:
-    air_temperature = T0 + beta_T * h
-else:
-    air_temperature = T_isa_trop
-
-# Pressure, BADA (3.1-18) to (3.1-20).
-if h <= h_trop:
-    pressure = p0 * (air_temperature / T0)**(-g / (beta_T * R))
-else:
-    p_trop = p0 * (T_isa_trop / T0)**(-g / (beta_T * R))
-    pressure = p_trop * math.exp(-g * (h - h_trop) / (R * T_isa_trop))
-
+air_temperature = temperature(h)  # also checks 0 <= h <= 20 km
+pressure = air_pressure(h)
 rho = pressure / (R * air_temperature)
-sound_speed = math.sqrt(gamma * R * air_temperature)
-rho0 = p0 / (R * T0)
+sound_speed = math.sqrt(gamma_air * R * air_temperature)
 
 # BADA (3.5-1): check the ceiling at the initial mass under ISA.
 delta_T = 0.0
@@ -120,32 +62,20 @@ if aircraft['h_max_ft'] != 0:
 if not mass_min <= initial_mass <= mass_max or h_ft > maximum_altitude:
     raise ValueError('Initial mass/altitude is outside the BADA ISA envelope.')
 
-Tmax = aircraft['C_tc1'] * (1 - h_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * h_ft**2)
-minimum_fuel_flow = Cf3 / 60 * (1 - h_ft / Cf4)
+Tmax = maximum_thrust(h)
+minimum_fuel_flow = minimum_fuel(h)
 a_l_max = 2.0 * 0.3048  # BADA section 5.2, ft/s^2 to m/s^2
 
 
-
-# Only three shared physical formulas need helper functions.
-# These work with both ordinary numbers and Pyomo symbolic variables.
+# Altitude is fixed, so wrap the shared functions (wings level: bank = 0).
 def drag(V, mass):
-    qS = 0.5 * rho * V**2 * S
-    return qS * CD0 + CD2 * (mass * g)**2 / qS
-
-
-def eta(V):
-    # BADA uses knots; convert kg/(kN min) to kg/(N s).
-    return Cf1 / 60000 * (1 + (V / knots_to_ms) / Cf2)
+    # BADA (3.6-1), (3.6-2), (3.6-5)
+    return fn.drag(V, mass, 0.0, rho)
 
 
 def calibrated_speed(V_TAS):
     # BADA (3.1-24) and (3.1-25). Both speeds are in m/s.
-    p = pressure
-    mu = (gamma - 1) / gamma
-    return (
-        (2 * p0 / (mu * rho0))
-        * ((1 + (p / p0) * ((1 + (mu * rho / (2 * p)) * V_TAS**2)**(1 / mu) - 1))**mu - 1)
-    )**(1 / 2)
+    return fn.calibrated_speed(V_TAS, h)
 
 
 # 4. Build and solve one model for each requested mesh

@@ -7,7 +7,7 @@ Heading chi is measured from EAST towards NORTH, as in the lab equations.
 The heading equation follows the statement exactly (no added transport term).
 
 Structure:
-  lab3_task3_functions.py  aircraft data, constants and auxiliary functions
+  lab3_functions.py        aircraft data, constants and auxiliary functions
   lab3_task3_rules.py      Pyomo constraint/objective rules
   lab3_task3_horizontal.py settings, geometry, model building, solve, outputs
 """
@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pyomo.environ as pyo
 
 import lab3_task3_rules as rules
-from lab3_task3_functions import (
+from lab3_functions import (
     R, Re, aircraft, air_pressure, gamma_air, knots_to_ms, maximum_thrust,
     temperature,
 )
@@ -148,34 +148,6 @@ for case in cases:
 
     # Objetivo
     model.obj = pyo.Objective(rule=rules.objective_rule, sense=pyo.minimize)
-    """
-    model.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
-    for var, scale in [(model.lon, 10), (model.lat, 10), (model.chi, 1), (model.bank, 1), (model.V, 1e-2), (model.mass, 1e-4), (model.thrust, 1e-4)]:
-        for i in model.N:
-            model.scaling_factor[var[i]] = scale
-    for c in model.component_data_objects(pyo.Constraint):
-        model.scaling_factor[c] = 1.0
-    for component, scale in [(model.longitude_dynamics, 10), (model.latitude_dynamics, 10), (model.speed_dynamics, 1e-2), (model.mass_dynamics, 1e-4)]:
-        for i in model.I:
-            model.scaling_factor[component[i]] = scale
-    model.scaling_factor[model.initial_speed] = 1e-2
-    model.scaling_factor[model.initial_mass] = 1e-4
-    model.scaling_factor[model.obj] = 1e-4
-    for i in model.I:
-        model.scaling_factor[model.midpoint_lon[i]] = 10
-    for i in model.I:
-        model.scaling_factor[model.midpoint_lat[i]] = 10
-    for i in model.I:
-        model.scaling_factor[model.midpoint_V[i]] = 0.01
-    for i in model.I:
-        model.scaling_factor[model.midpoint_chi[i]] = 1
-    for i in model.I:
-        model.scaling_factor[model.midpoint_mass[i]] = 0.0001
-    for i in model.I:
-        model.scaling_factor[model.midpoint_thrust[i]] = 0.0001
-    for i in model.I:
-        model.scaling_factor[model.midpoint_bank[i]] = 1
-    """    
 
     # Confirm solver termination and physical constraint residuals.
     result = solver.solve(model, tee=show_solver)

@@ -8,7 +8,7 @@ N is the number of endpoint nodes, giving 2*N-1 total stages.
 """
 import pyomo.environ as pyo
 
-from lab3_task3_functions import (
+from lab3_functions import (
     S, aircraft, air_pressure, calibrated_speed, eta, g, knots_to_ms,
     minimum_fuel, rates,
 )

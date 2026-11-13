@@ -43,21 +43,40 @@ g = 9.80665
 R = 287.05287
 gamma_air = 1.4
 S = aircraft['S']
-a0 = math.sqrt(gamma_air * R * 288.15)
 Re = 6_371_000.0
 
+# ISA constants (same as tasks 1 and 2)
+T0 = 288.15
+p0 = 101325
+beta_T = -0.0065
+h_trop = 11000
+T_isa_trop = T0 + beta_T * h_trop  # BADA (3.1-14)
+rho0 = p0 / (R * T0)
+
 # Funciones para las restricciones
+# Altitude h is a fixed number (m) in task 3, so the exact ISA with if/else is valid.
+
+
+def check_altitude(h):
+    if not 0 <= h <= 20000:
+        raise ValueError('This ISA implementation supports altitudes from 0 to 20 km.')
 
 
 def temperature(h):
-    below_tropopause = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
-    return 288.15 - 0.0065 * below_tropopause
+    # Temperature for ISA (delta T = 0), BADA (3.1-13) and (3.1-16).
+    check_altitude(h)
+    if h <= h_trop:
+        return T0 + beta_T * h
+    return T_isa_trop
 
 
 def air_pressure(h):
-    lower_h = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
-    temp = 288.15 - 0.0065 * lower_h
-    return 101325 * (temp / 288.15)**(g / (R * 0.0065)) * pyo.exp(-g * (h - lower_h) / (R * 216.65))
+    # Pressure, BADA (3.1-18) to (3.1-20).
+    check_altitude(h)
+    if h <= h_trop:
+        return p0 * (temperature(h) / T0)**(-g / (beta_T * R))
+    p_trop = p0 * (T_isa_trop / T0)**(-g / (beta_T * R))
+    return p_trop * math.exp(-g * (h - h_trop) / (R * T_isa_trop))
 
 
 def eta(V):
@@ -65,18 +84,24 @@ def eta(V):
 
 
 def maximum_thrust(h):
-    altitude_ft = h / 0.3048
-    return aircraft['C_tc1'] * (1 - altitude_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * altitude_ft**2)
+    h_ft = h / 0.3048
+    return aircraft['C_tc1'] * (1 - h_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * h_ft**2)
 
 
 def minimum_fuel(h):
-    return aircraft['C_f3'] / 60 * (1 - h / 0.3048 / aircraft['C_f4'])
+    h_ft = h / 0.3048
+    return aircraft['C_f3'] / 60 * (1 - h_ft / aircraft['C_f4'])
 
 
-def calibrated_speed(V, h):
-    sound_squared = gamma_air * R * temperature(h)
-    impact = air_pressure(h) * ((1 + 0.2 * V**2 / sound_squared)**3.5 - 1)
-    return a0 * pyo.sqrt(5 * ((1 + impact / 101325)**(2 / 7) - 1))
+def calibrated_speed(V_TAS, h):
+    # BADA (3.1-24) and (3.1-25). Both speeds are in m/s.
+    p = air_pressure(h)
+    rho = p / (R * temperature(h))
+    mu = (gamma_air - 1) / gamma_air
+    return (
+        (2 * p0 / (mu * rho0))
+        * ((1 + (p / p0) * ((1 + (mu * rho / (2 * p)) * V_TAS**2)**(1 / mu) - 1))**mu - 1)
+    )**(1 / 2)
 
 
 def drag(V, mass, bank, rho):
