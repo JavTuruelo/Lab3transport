@@ -131,13 +131,14 @@ for case in cases:
     model.midpoint_thrust = pyo.Constraint(model.I, rule=rules.midpoint_thrust_rule)
     model.midpoint_bank = pyo.Constraint(model.I, rule=rules.midpoint_bank_rule)
 
-    # Envolvente de vuelo
+    # Constraints de vuelo
+
     model.minimum_thrust = pyo.Constraint(model.N, rule=rules.minimum_thrust_rule)
     model.maximum_speed = pyo.Constraint(model.N, rule=rules.maximum_speed_rule)
     model.minimum_speed = pyo.Constraint(model.N, rule=rules.minimum_speed_rule)
     model.buffet = pyo.Constraint(model.N, rule=rules.buffet_rule)
 
-    # Condiciones de contorno
+    # Contorno
     model.initial_longitude = pyo.Constraint(rule=rules.initial_longitude_rule)
     model.final_longitude = pyo.Constraint(rule=rules.final_longitude_rule)
     model.initial_latitude = pyo.Constraint(rule=rules.initial_latitude_rule)
@@ -145,8 +146,9 @@ for case in cases:
     model.initial_speed = pyo.Constraint(rule=rules.initial_speed_rule)
     model.initial_mass = pyo.Constraint(rule=rules.initial_mass_rule)
 
-    # Objetivo: minimo combustible
+    # Objetivo
     model.obj = pyo.Objective(rule=rules.objective_rule, sense=pyo.minimize)
+    """
     model.scaling_factor = pyo.Suffix(direction=pyo.Suffix.EXPORT)
     for var, scale in [(model.lon, 10), (model.lat, 10), (model.chi, 1), (model.bank, 1), (model.V, 1e-2), (model.mass, 1e-4), (model.thrust, 1e-4)]:
         for i in model.N:
@@ -173,6 +175,7 @@ for case in cases:
         model.scaling_factor[model.midpoint_thrust[i]] = 0.0001
     for i in model.I:
         model.scaling_factor[model.midpoint_bank[i]] = 1
+    """    
 
     # Confirm solver termination and physical constraint residuals.
     result = solver.solve(model, tee=show_solver)
@@ -185,8 +188,8 @@ for case in cases:
             violation = max(violation, pyo.value(constraint.lower) - body)
         if constraint.has_ub():
             violation = max(violation, body - pyo.value(constraint.upper))
-        factor = model.scaling_factor.get(constraint, 1.0)
-        worst_scaled_violation = max(worst_scaled_violation, factor * violation)
+        #factor = model.scaling_factor.get(constraint, 1.0)
+        #s worst_scaled_violation = max(worst_scaled_violation, factor * violation)
     if worst_scaled_violation > 1e-5:
         raise RuntimeError(f'Constraint violation too large: {worst_scaled_violation}')
     time = [i*step for i in model.N]

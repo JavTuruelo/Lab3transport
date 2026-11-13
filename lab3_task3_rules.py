@@ -13,7 +13,7 @@ from lab3_task3_functions import (
     minimum_fuel, rates,
 )
 
-# Dinamica: Simpson (integral del tramo) + Hermite (punto medio)
+# Dinamica: Simpson y Hermite
 
 
 def longitude_dynamics_rule(model, i):
@@ -40,7 +40,6 @@ def latitude_dynamics_rule(model, i):
     f_mid = rates(model, middle)[1]
     f_right = rates(model, right)[1]
     return model.lat[right]-model.lat[left] == p.final_time/(3*p.n)*(f_left+4*f_mid+f_right)
-
 
 def midpoint_lat_rule(model, i):
     p = model.params
@@ -100,7 +99,7 @@ def midpoint_mass_rule(model, i):
     f_right = rates(model, right)[4]
     return model.mass[middle] == (model.mass[left]+model.mass[right])/2+p.final_time/(4*p.n)*(f_left-f_right)
 
-# Controles: interpolacion lineal en el punto medio
+# Controles
 
 
 def midpoint_thrust_rule(model, i):
@@ -110,7 +109,7 @@ def midpoint_thrust_rule(model, i):
 def midpoint_bank_rule(model, i):
     return model.bank[2*i+1] == (model.bank[2*i]+model.bank[2*i+2])/2
 
-# Envolvente de vuelo
+# Constraints de vuelo
 
 
 def minimum_thrust_rule(model, i):
@@ -129,7 +128,7 @@ def buffet_rule(model, i):
     mach = model.V[i]/model.params.sound
     return aircraft['Clbo_M0']*mach**2-aircraft['K']*mach**3 >= model.mass[i]*g/(pyo.cos(model.bank[i])*0.583*air_pressure(model.params.h)*S)
 
-# Condiciones de contorno
+# Contorno
 
 
 def initial_longitude_rule(model):
