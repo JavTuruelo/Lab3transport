@@ -13,73 +13,15 @@ import math
 from pathlib import Path
 import pyomo.environ as pyo
 
-aircraft = {
-    'm_ref': 64000.0,
-    'CM16': 0.0,
-    'V_MO_kn': 350.0,
-    'C_f1': 0.75882,
-    'C_f2': 2938.5,
-    'C_f3': 8.9418,
-    'C_f4': 93865.0,
-    'G_t': -313.6,
-    'G_w': 0.4325,
-    'CD0_CR': 0.026659,
-    'h_MO_ft': 41000.0,
-    'Clbo_M0': 1.4041,
-    'Vstall_CR_kn': 140.5,
-    'K': 0.79242,
-    'h_max_ft': 33295.0,
-    'S': 122.6,
-    'm_max': 77000.0,
-    'M_MO': 0.82,
-    'C_tc4': 10.138,
-    'C_tc5': 0.008871,
-    'C_tc2': 51680.0,
-    'C_tc3': 5.6809e-11,
-    'C_tc1': 142310.0,
-    'm_min': 39000.0,
-    'CD2_CR': 0.038726,
-    'm_pyld': 21500.0,
-}
-
-knots_to_ms = 1852.0 / 3600.0
-g = 9.80665
-R = 287.05287
-gamma_air = 1.4
-S = aircraft['S']
-a0 = math.sqrt(gamma_air * R * 288.15)
-
-# BADA formulas, without the optional cruise fuel/thrust corrections.
-def temperature(h):
-    # Continuous ISA through the 11 km tropopause (smooth transition over ~2 m).
-    below_tropopause = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
-    return 288.15 - 0.0065 * below_tropopause
-
-
-def air_pressure(h):
-    lower_h = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
-    temp = 288.15 - 0.0065 * lower_h
-    return 101325 * (temp / 288.15)**(g / (R * 0.0065)) * pyo.exp(-g * (h - lower_h) / (R * 216.65))
-
-
-def eta(V):
-    return aircraft['C_f1'] / 60000 * (1 + V / knots_to_ms / aircraft['C_f2'])
-
-
-def maximum_thrust(h):
-    altitude_ft = h / 0.3048
-    return aircraft['C_tc1'] * (1 - altitude_ft / aircraft['C_tc2'] + aircraft['C_tc3'] * altitude_ft**2)
-
-
-def minimum_fuel(h):
-    return aircraft['C_f3'] / 60 * (1 - h / 0.3048 / aircraft['C_f4'])
-
-
-def calibrated_speed(V, h):
-    sound_squared = gamma_air * R * temperature(h)
-    impact = air_pressure(h) * ((1 + 0.2 * V**2 / sound_squared)**3.5 - 1)
-    return a0 * pyo.sqrt(5 * ((1 + impact / 101325)**(2 / 7) - 1))
-
+from lab3_functions import (
+    R, S, aircraft, eta, g, gamma_air, knots_to_ms, maximum_thrust, minimum_fuel,
+    temperature_smooth as temperature,
+    air_pressure_smooth as air_pressure,
+    calibrated_speed_smooth as calibrated_speed,
+    lift_vertical as lift,
+    drag_vertical as drag,
+    rates_vertical as rates,
+)
 
 # 1. Editable flight conditions and sensitivity cases
 N = 100  # endpoint nodes; midpoint stages are additional
@@ -107,24 +49,6 @@ output_folder = Path(__file__).resolve().parent / 'results_task4'
 if cost_time_unit not in ('seconds', 'hours'):
     raise ValueError('cost_time_unit must be seconds or hours')
 cost_time_divisor = 3600.0 if cost_time_unit == 'hours' else 1.0
-
-
-def lift(h, V, CL):
-    rho = air_pressure(h) / (R * temperature(h))
-    return 0.5 * rho * V**2 * S * CL
-
-
-def drag(h, V, CL):
-    rho = air_pressure(h) / (R * temperature(h))
-    return 0.5 * rho * V**2 * S * (aircraft['CD0_CR'] + aircraft['CD2_CR'] * CL**2)
-
-
-def rates(model, i):
-    return (model.V[i]*pyo.cos(model.gamma[i]),
-            model.V[i]*pyo.sin(model.gamma[i]),
-            (model.thrust[i]-drag(model.h[i],model.V[i],model.CL[i]))/model.mass[i]-g*pyo.sin(model.gamma[i]),
-            (lift(model.h[i],model.V[i],model.CL[i])-model.mass[i]*g*pyo.cos(model.gamma[i]))/(model.mass[i]*model.V[i]),
-            -model.thrust[i]*eta(model.V[i]))
 
 
 solver = pyo.SolverFactory('ipopt')

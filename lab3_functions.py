@@ -118,3 +118,44 @@ def rates(model, i):
             (model.thrust[i]-drag(model.V[i], model.mass[i], model.bank[i], p.rho))/model.mass[i],
             g*pyo.tan(model.bank[i])/model.V[i],
             -model.thrust[i]*eta(model.V[i]))
+
+# Special functions for task 4 (vertical flight). The altitude h is a variable, so the smooth ISA is used.
+
+a0 = math.sqrt(gamma_air * R * T0)
+
+
+def temperature_smooth(h):
+    # Continuous ISA through the 11 km tropopause (smooth transition over ~2 m).
+    below_tropopause = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
+    return 288.15 - 0.0065 * below_tropopause
+
+
+def air_pressure_smooth(h):
+    lower_h = (h + 11000 - pyo.sqrt((h - 11000)**2 + 1.0)) / 2
+    temp = 288.15 - 0.0065 * lower_h
+    return 101325 * (temp / 288.15)**(g / (R * 0.0065)) * pyo.exp(-g * (h - lower_h) / (R * 216.65))
+
+
+def calibrated_speed_smooth(V, h):
+    sound_squared = gamma_air * R * temperature_smooth(h)
+    impact = air_pressure_smooth(h) * ((1 + 0.2 * V**2 / sound_squared)**3.5 - 1)
+    return a0 * pyo.sqrt(5 * ((1 + impact / 101325)**(2 / 7) - 1))
+
+
+def lift_vertical(h, V, CL):
+    rho = air_pressure_smooth(h) / (R * temperature_smooth(h))
+    return 0.5 * rho * V**2 * S * CL
+
+
+def drag_vertical(h, V, CL):
+    rho = air_pressure_smooth(h) / (R * temperature_smooth(h))
+    return 0.5 * rho * V**2 * S * (aircraft['CD0_CR'] + aircraft['CD2_CR'] * CL**2)
+
+
+def rates_vertical(model, i):
+    """State derivatives (x, h, V, gamma, mass) at stage i (task 4)."""
+    return (model.V[i]*pyo.cos(model.gamma[i]),
+            model.V[i]*pyo.sin(model.gamma[i]),
+            (model.thrust[i]-drag_vertical(model.h[i], model.V[i], model.CL[i]))/model.mass[i]-g*pyo.sin(model.gamma[i]),
+            (lift_vertical(model.h[i], model.V[i], model.CL[i])-model.mass[i]*g*pyo.cos(model.gamma[i]))/(model.mass[i]*model.V[i]),
+            -model.thrust[i]*eta(model.V[i]))
