@@ -1,8 +1,4 @@
 """Task 2: free-time 1D cruise and Cost Index sensitivity.
-Run: python lab3_task2_cost_index.py
-Settings are below. DOC follows the printed formula: CI * time + fuel_kg/100.
-Time is in seconds by default. Set cost_time_unit='hours' to explore the
-alternative hour interpretation of the CI units; these are distinct models.
 """
 import json
 import math
@@ -18,7 +14,7 @@ from lab3_functions import (
 # 1. Editable settings
 N = 100  # endpoint nodes; midpoint stages are additional
 CI_values = [0, 10, 50, 200, 999]
-cost_time_unit = 'seconds'  # literal lab formula with SI state equations
+cost_time_unit = 'hours'  # Hours and pounds for DOC; seconds and kg for dynamics.
 cases = [
     {'name': 'baseline', 'mass': 51000.0, 'final_speed_kn': None},
     {'name': 'heavier', 'mass': 55000.0, 'final_speed_kn': None},
@@ -40,6 +36,7 @@ output_folder = Path(__file__).resolve().parent / 'results_task2'
 if cost_time_unit not in ('seconds', 'hours'):
     raise ValueError('cost_time_unit must be seconds or hours')
 cost_time_divisor = 3600.0 if cost_time_unit == 'hours' else 1.0
+cost_fuel_multiplier = 1 / 0.45359237 if cost_time_unit == 'hours' else 1.0
 
 air_temperature = temperature(h)  # also checks 0 <= h <= 20 km
 pressure = air_pressure(h)
@@ -246,7 +243,7 @@ for case, CI in [(case, CI) for case in cases for CI in CI_values]:
         model.final_speed = pyo.Constraint(rule=final_speed_rule)
 
     def objective_rule(model):
-        return CI * model.tf / cost_time_divisor + (mass0 - model.mass[n]) / 100
+        return CI * model.tf / cost_time_divisor + (mass0 - model.mass[n]) * cost_fuel_multiplier / 100
 
     model.obj = pyo.Objective(rule=objective_rule, sense=pyo.minimize)
     if use_scaling:
@@ -298,7 +295,7 @@ for case, CI in [(case, CI) for case in cases for CI in CI_values]:
     samples.append((tf, pyo.value(model.V[n]),
                     pyo.value(model.mass[n]), pyo.value(model.thrust[n])))
     time, V, mass, thrust = zip(*samples)
-    summary = dict(case=case['name'], CI=CI, cost_time_unit=cost_time_unit,
+    summary = dict(case=case['name'], CI=CI, cost_time_unit=cost_time_unit, cost_fuel_unit='lb' if cost_time_unit == 'hours' else 'kg',
                    use_scaling=use_scaling, time_s=tf, fuel_kg=mass0-mass[-1], DOC=pyo.value(model.obj),
                    time_bound_active=min(abs(tf-time_bounds[0]), abs(tf-time_bounds[1])) < 0.1,
                    max_scaled_violation=worst_scaled_violation)

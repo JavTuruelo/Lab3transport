@@ -59,7 +59,7 @@ solver.solve(m, tee=True)
 
 
 # ######################################################################################
-# #####-------------- Datos del Solver ----------------------
+# #####-------------- Solver settings ----------------------
 # #######################################################################################
 # solver = 'ipopt'
 # opt = SolverFactory(solver)
@@ -84,7 +84,7 @@ for i in m.N:
     time[i] = value(m.step)*i
 
 #####################################################################################
-####  Imprimir en consola --------------------------------------------  
+####  Print to the terminal --------------------------------------------
 #####################################################################################
 
 # print ('')
@@ -94,14 +94,14 @@ for i in m.N:
 #         print ('  {:02.0f}  {:12.2f} {:12.2f}  {:12.2f}  \n'.format(i,time[i], x1[i], x2[i]))
 
 # #####################################################################################
-# #Crear y sobreescribir output txt  ---------------------------------------
+# #Create and overwrite the output text file  ---------------------------------------
 # #####################################################################################
 # def creartxt():
-#     archi = open('min_distancia.txt','w') #w crear archivo txt y lo abre para escribir write
+#     archi = open('min_distancia.txt','w') #w creates or truncates the text file and opens it for writing
 #     archi.close()
     
 # def grabartxt():
-#     archi = open('min_distancia.txt','a') # a abre el archivo para escribir, y lo crea si no lo está
+#     archi = open('min_distancia.txt','a') # a opens the file for appending and creates it if needed
 #     archi.write('n        x           y   \n')
 #     for i in m.N:
 #         archi.write('  {:02.0f}  {:12.2f}  {:12.2f}  \n'.format(i, x[i], y[i]))
@@ -118,7 +118,7 @@ for i in m.N:
 #     archi.close()
     
 #####################################################################################
-#### Gráficas  ---------------------------------------
+#### Plots  ---------------------------------------
 #####################################################################################
 import matplotlib.pyplot as plt
 #pylab inline

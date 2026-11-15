@@ -1,17 +1,5 @@
-"""Task 3: horizontal spherical-Earth A320 trajectory at FL380 (main script).
-Run: python lab3_task3_horizontal.py
-Hermite-Simpson collocation with linear control interpolation; minimum fuel at a fixed common arrival time.
-Approximate Madrid-Barajas / Paris-CDG coordinates are editable modelling
-inputs. They locate the horizontal endpoints only: no airport climb/descent.
-Heading chi is measured from EAST towards NORTH, as in the lab equations.
-The heading equation follows the statement exactly (no added transport term).
-
-Structure:
-  lab3_functions.py        aircraft data, constants and auxiliary functions
-  lab3_task3_rules.py      Pyomo constraint/objective rules
-  lab3_task3_horizontal.py settings, geometry, model building, solve, outputs
+"""Task 3: horizontal spherical-Earth A320 trajectory at FL380.
 """
-import csv
 import json
 import math
 from pathlib import Path
@@ -25,7 +13,7 @@ from lab3_functions import (
 )
 
 
-# Datos de la geometria (paris, madrid)
+# Geometry data
 N = 100
 start_lat_deg, start_lon_deg = 40.472, -3.561
 end_lat_deg, end_lon_deg = 49.010, 2.548
@@ -35,13 +23,16 @@ show_solver = False
 make_plots = True
 show_plots = False
 output_folder = Path(__file__).resolve().parent / 'results_task3'
+baseline_case = {'name': 'zero_wind', 'wx': 0.0, 'wy': 0.0, 'mass': 51000.0, 'bank_deg': 35.0}
 cases = [
-    {'name': 'zero_wind', 'wx': 0.0, 'wy': 0.0, 'mass': 51000.0, 'bank_deg': 35.0},
+    baseline_case,
     {'name': 'east_wind', 'wx': 30.0, 'wy': 0.0, 'mass': 51000.0, 'bank_deg': 35.0},
     {'name': 'north_wind', 'wx': 0.0, 'wy': 20.0, 'mass': 51000.0, 'bank_deg': 35.0},
     {'name': 'combined_wind', 'wx': 30.0, 'wy': 20.0, 'mass': 51000.0, 'bank_deg': 35.0},
     {'name': 'heavier', 'wx': 0.0, 'wy': 0.0, 'mass': 55000.0, 'bank_deg': 35.0},
     {'name': 'bank_limit', 'wx': 30.0, 'wy': 20.0, 'mass': 51000.0, 'bank_deg': 15.0},
+    {**baseline_case, 'name': 'max_thrust_off', 'enforce_max_thrust': False},
+    {**baseline_case, 'name': 'min_thrust_off', 'enforce_min_thrust': False},
 ]
 lon0, lat0 = math.radians(start_lon_deg), math.radians(start_lat_deg)
 lonf, latf = math.radians(end_lon_deg), math.radians(end_lat_deg)
@@ -56,7 +47,7 @@ step = final_time / n
 reference_lon = []
 reference_lat = []
 
-# Ortodromica Madrid Paris
+# Orthodromic Madrid Paris
 
 for i in range(n+1):
     f = i / n
@@ -76,14 +67,14 @@ if not solver.available(exception_flag=False):
 solver.options['max_iter'] = 5000
 solver.options['tol'] = 1e-8
 solver.options['nlp_scaling_method'] = 'user-scaling'
-output_folder.mkdir(parents=True, exist_ok=True)
-summaries = []
 profiles = []
 
 for case in cases:
     label = case['name']
     wx, wy = case['wx'], case['wy']  # eastward/northward wind [m/s]
     mass0 = case['mass']
+    enforce_max_thrust = case.get('enforce_max_thrust', True)
+    enforce_min_thrust = case.get('enforce_min_thrust', True)
     bank_limit = math.radians(case['bank_deg'])
     ceiling = min(aircraft['h_MO_ft'], aircraft['h_max_ft'] + aircraft['G_w'] * (aircraft['m_max']-mass0))
     if h / 0.3048 > ceiling:
@@ -96,7 +87,7 @@ for case in cases:
     model.V = pyo.Var(model.N, bounds=(100, aircraft['M_MO']*sound), initialize=213)
     model.chi = pyo.Var(model.N, bounds=(-math.pi, math.pi), initialize=0.8)
     model.mass = pyo.Var(model.N, bounds=(aircraft['m_min'], mass0), initialize=mass0)
-    model.thrust = pyo.Var(model.N, bounds=(0, pyo.value(maximum_thrust(h))), initialize=25000)
+    model.thrust = pyo.Var(model.N, bounds=(0, pyo.value(maximum_thrust(h)) if enforce_max_thrust else None), initialize=25000)
     model.bank = pyo.Var(model.N, bounds=(-bank_limit, bank_limit), initialize=0)
     for i in model.N:
         model.lon[i].value = reference_lon[i]
@@ -108,14 +99,14 @@ for case in cases:
         model.V[i].value = min(aircraft['M_MO']*sound, math.hypot(east-wx, north-wy))
 
 
-    # Datos del caso que leen las rules (lab3_task3_rules.py)
+    # Case data used by the rules in lab3_task3_rules.py
     model.params = SimpleNamespace(
         final_time=final_time, n=n, h=h, rho=rho, sound=sound,
         wx=wx, wy=wy, lon0=lon0, lonf=lonf, lat0=lat0, latf=latf,
         V0=V0, mass0=mass0,
     )
 
-    # Dinamica (Hermite-Simpson)
+    # Dynamics (Hermite–Simpson)
     model.longitude_dynamics = pyo.Constraint(model.I, rule=rules.longitude_dynamics_rule)
     model.midpoint_lon = pyo.Constraint(model.I, rule=rules.midpoint_lon_rule)
     model.latitude_dynamics = pyo.Constraint(model.I, rule=rules.latitude_dynamics_rule)
@@ -127,18 +118,19 @@ for case in cases:
     model.mass_dynamics = pyo.Constraint(model.I, rule=rules.mass_dynamics_rule)
     model.midpoint_mass = pyo.Constraint(model.I, rule=rules.midpoint_mass_rule)
 
-    # Controles
+    # Controls
     model.midpoint_thrust = pyo.Constraint(model.I, rule=rules.midpoint_thrust_rule)
     model.midpoint_bank = pyo.Constraint(model.I, rule=rules.midpoint_bank_rule)
 
-    # Constraints de vuelo
+    # Flight constraints
 
-    model.minimum_thrust = pyo.Constraint(model.N, rule=rules.minimum_thrust_rule)
+    if enforce_min_thrust:
+        model.minimum_thrust = pyo.Constraint(model.N, rule=rules.minimum_thrust_rule)
     model.maximum_speed = pyo.Constraint(model.N, rule=rules.maximum_speed_rule)
     model.minimum_speed = pyo.Constraint(model.N, rule=rules.minimum_speed_rule)
     model.buffet = pyo.Constraint(model.N, rule=rules.buffet_rule)
 
-    # Contorno
+    # Boundary conditions
     model.initial_longitude = pyo.Constraint(rule=rules.initial_longitude_rule)
     model.final_longitude = pyo.Constraint(rule=rules.final_longitude_rule)
     model.initial_latitude = pyo.Constraint(rule=rules.initial_latitude_rule)
@@ -146,13 +138,13 @@ for case in cases:
     model.initial_speed = pyo.Constraint(rule=rules.initial_speed_rule)
     model.initial_mass = pyo.Constraint(rule=rules.initial_mass_rule)
 
-    # Objetivo
+    # Objective
     model.obj = pyo.Objective(rule=rules.objective_rule, sense=pyo.minimize)
 
     # Confirm solver termination and physical constraint residuals.
     result = solver.solve(model, tee=show_solver)
     pyo.assert_optimal_termination(result)
-    worst_scaled_violation = 0.0
+    worst_violation = 0.0
     for constraint in model.component_data_objects(pyo.Constraint, active=True):
         body = pyo.value(constraint.body)
         violation = 0.0
@@ -160,17 +152,15 @@ for case in cases:
             violation = max(violation, pyo.value(constraint.lower) - body)
         if constraint.has_ub():
             violation = max(violation, body - pyo.value(constraint.upper))
-        #factor = model.scaling_factor.get(constraint, 1.0)
-        #s worst_scaled_violation = max(worst_scaled_violation, factor * violation)
-    if worst_scaled_violation > 1e-5:
-        raise RuntimeError(f'Constraint violation too large: {worst_scaled_violation}')
+        worst_violation = max(worst_violation, violation)
+    if worst_violation > 1e-5:
+        raise RuntimeError(f'Constraint violation too large: {worst_violation}')
     time = [i*step for i in model.N]
     lon = [pyo.value(model.lon[i]) for i in model.N]
     lat = [pyo.value(model.lat[i]) for i in model.N]
     V = [pyo.value(model.V[i]) for i in model.N]
     mass = [pyo.value(model.mass[i]) for i in model.N]
     thrust = [pyo.value(model.thrust[i]) for i in model.N]
-    chi = [pyo.value(model.chi[i]) for i in model.N]
     bank = [pyo.value(model.bank[i]) for i in model.N]
     cross_track = []
     for lo, la in zip(lon, lat):
@@ -184,25 +174,24 @@ for case in cases:
     summary = dict(case=label, time_s=final_time, fuel_kg=mass0-mass[-1],
                    great_circle_km=great_circle_distance/1000, route_km=route_length/1000,
                    max_cross_track_km=max(abs(v) for v in cross_track)/1000,
-                   wx_m_s=wx, wy_m_s=wy, max_scaled_violation=worst_scaled_violation)
+                   wx_m_s=wx, wy_m_s=wy, max_constraint_violation=worst_violation)
+    summary.update(
+        enforce_max_thrust=enforce_max_thrust,
+        enforce_min_thrust=enforce_min_thrust,
+        max_abs_bank_deg=max(abs(math.degrees(value)) for value in bank),
+        min_thrust_kN=min(thrust) / 1000,
+        max_thrust_kN=max(thrust) / 1000,
+    )
     summary['nodes'] = N
     summary['stages'] = n + 1
     summary['termination'] = str(result.solver.termination_condition)
-    summaries.append(summary)
     profiles.append((label, time, lon, lat, V, thrust, cross_track))
-    with (output_folder / f'{label}.csv').open('w', newline='') as file:
-        writer=csv.writer(file)
-        writer.writerow(['time_s','longitude_deg','latitude_deg','TAS_m_s','heading_from_east_deg','mass_kg','thrust_N','bank_deg','cross_track_m'])
-        writer.writerows(zip(time, map(math.degrees,lon), map(math.degrees,lat), V, map(math.degrees,chi), mass, thrust, map(math.degrees,bank),cross_track))
     print(json.dumps(summary), flush=True)
 
-with (output_folder / 'great_circle.csv').open('w', newline='') as file:
-    writer=csv.writer(file)
-    writer.writerow(['longitude_deg','latitude_deg'])
-    writer.writerows(zip(map(math.degrees,reference_lon), map(math.degrees,reference_lat)))
-(output_folder / 'summary.json').write_text(json.dumps(summaries,indent=2))
 if make_plots:
     import matplotlib.pyplot as plt
+
+    output_folder.mkdir(parents=True, exist_ok=True)
     fig, axes=plt.subplots(2,2,figsize=(12,8))
     axes[0,0].plot(list(map(math.degrees,reference_lon)),list(map(math.degrees,reference_lat)),'k--',label='Great circle')
     for label,time,lon,lat,V,thrust,cross_track in profiles:
@@ -220,6 +209,18 @@ if make_plots:
         ax.legend(fontsize=7)
     fig.tight_layout()
     fig.savefig(output_folder/'horizontal_profiles.png',dpi=180)
+    fig_sensitivity, axes_sensitivity = plt.subplots(1, 2, figsize=(11, 4))
+    for label, time, _, _, _, thrust, cross_track in profiles:
+        if label in ('zero_wind', 'max_thrust_off', 'min_thrust_off'):
+            axes_sensitivity[0].plot(time, [value / 1000 for value in thrust], label=label)
+            axes_sensitivity[1].plot(time, [value / 1000 for value in cross_track], label=label)
+    axes_sensitivity[0].set(xlabel='Time [s]', ylabel='Thrust [kN]')
+    axes_sensitivity[1].set(xlabel='Time [s]', ylabel='Cross-track distance [km]')
+    for ax in axes_sensitivity.flat:
+        ax.grid(True)
+        ax.legend()
+    fig_sensitivity.tight_layout()
+    fig_sensitivity.savefig(output_folder / 'thrust_sensitivity.png', dpi=180)
     if show_plots:
         plt.show()
     plt.close('all')

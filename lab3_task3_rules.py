@@ -13,7 +13,7 @@ from lab3_functions import (
     minimum_fuel, rates,
 )
 
-# Dinamica: Simpson y Hermite
+# Hermite–Simpson dynamics
 
 
 def longitude_dynamics_rule(model, i):
@@ -99,7 +99,7 @@ def midpoint_mass_rule(model, i):
     f_right = rates(model, right)[4]
     return model.mass[middle] == (model.mass[left]+model.mass[right])/2+p.final_time/(4*p.n)*(f_left-f_right)
 
-# Controles
+# Controls
 
 
 def midpoint_thrust_rule(model, i):
@@ -109,7 +109,7 @@ def midpoint_thrust_rule(model, i):
 def midpoint_bank_rule(model, i):
     return model.bank[2*i+1] == (model.bank[2*i]+model.bank[2*i+2])/2
 
-# Constraints de vuelo
+# Flight constraints
 
 
 def minimum_thrust_rule(model, i):
@@ -128,7 +128,7 @@ def buffet_rule(model, i):
     mach = model.V[i]/model.params.sound
     return aircraft['Clbo_M0']*mach**2-aircraft['K']*mach**3 >= model.mass[i]*g/(pyo.cos(model.bank[i])*0.583*air_pressure(model.params.h)*S)
 
-# Contorno
+# Boundary conditions
 
 
 def initial_longitude_rule(model):
@@ -154,7 +154,7 @@ def initial_speed_rule(model):
 def initial_mass_rule(model):
     return model.mass[0] == model.params.mass0
 
-# Objetivo
+# Objective
 
 
 def objective_rule(model):

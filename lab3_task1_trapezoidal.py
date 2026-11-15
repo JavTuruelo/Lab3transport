@@ -1,7 +1,4 @@
 """Lab 3 - Task 1: A320 minimum-fuel cruise, trapezoidal collocation.
-Run: python lab3_task1_trapezoidal.py
-Change the flight conditions and output settings below directly.
-Thrust and fuel flow follow the lab equations without cruise corrections.
 """
 
 import json

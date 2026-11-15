@@ -7,7 +7,7 @@ is read from model.params, which the main script attaches to each model.
 import math
 import pyomo.environ as pyo
 
-# Datos referencia del avion
+# Aircraft reference data
 
 aircraft = {
     'm_ref': 64000.0,
@@ -53,7 +53,7 @@ h_trop = 11000
 T_isa_trop = T0 + beta_T * h_trop  # BADA (3.1-14)
 rho0 = p0 / (R * T0)
 
-# Funciones para las restricciones
+# Constraint helper functions
 # Altitude h is a fixed number (m) in task 3, so the exact ISA with if/else is valid.
 
 

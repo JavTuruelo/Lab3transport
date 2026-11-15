@@ -1,7 +1,4 @@
 """Lab 3 - Task 1: A320 minimum-fuel cruise, hermite_simpson collocation.
-Run: python lab3_task1_hermite_simpson.py
-Change the flight conditions and output settings below directly.
-Thrust and fuel flow follow the lab equations without cruise corrections.
 """
 
 import json
@@ -112,7 +109,7 @@ for N in N_values:
     for i in model.N:
         model.x[i].value = final_distance * i / n
 
-    # 5. Hermite-Simpson: interpolate states and optimize midpoint thrust.
+    # Hermite-Simpson: interpolate states and optimize midpoint thrust.
     model.thrust_mid = pyo.Var(model.Ns, bounds=(0, Tmax if enforce_max_thrust else None), initialize=min(Tmax, drag(final_distance / final_time, initial_mass)))
 
     def midpoint_distance(model, i):

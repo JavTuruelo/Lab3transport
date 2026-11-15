@@ -61,7 +61,7 @@ Settings are ordinary Python variables near the top of each script. Edit them di
 - `show_plots`: open figures interactively. Close the Task 1 plot windows to finish those scripts, or set this option to `False`.
 - `output_folder`: choose the results directory.
 
-The supplied A320 coefficients are hardcoded in each script. The TXT file is retained as a reference and is not required at runtime.
+The scripts import the A320 coefficients from lab3_functions.py. Keep this module and lab3_task3_rules.py and lab3_task4_rules.py beside the five entry scripts.
 
 ## Results and supporting material
 
@@ -75,17 +75,17 @@ results_task3/
 results_task4/
 ```
 
-These folders contain trajectory CSV files, JSON summaries and PNG figures. Rerunning a script replaces its corresponding output files. Summaries include solver or feasibility information; the Task 1 summaries also report dynamics defects in physical units.
+The scripts print numerical summaries to the terminal and save PNG figures when plotting is enabled. Any CSV and JSON files in these folders are outputs from earlier versions.
 
 The repository also includes the lab statement, lecture PDFs, BADA manual, A320 reference data and the original optimal-control exercise examples.
 
-See [the implementation and results guide](lab3_tasks2_3_4_guide.md) for the assumptions, sensitivity cases, interpretation of the results and verified default result tables for Tasks 2-4.
+The implementation and results guide contains historical results from earlier versions. Use current script output for the submission.
 
 ## Modeling assumptions and interpretation
 
 - State equations use SI units. BADA formulas receive the required conversions to knots and feet.
 - Thrust and fuel flow follow the lab equations without the additional BADA cruise thrust or fuel correction factors.
-- Task 2 uses `CI = [0, 10, 50, 200, 999]`. The default cost is the literal `CI * tf + fuel_kg / 100`, with time in seconds. This weighting strongly favors minimum time for nonzero CI. The statement's hour/pound CI units require an interpretation; the alternative hour-based time term is explicitly selectable and documented in the guide. These scores should not be presented as reconciled dollar costs.
+- Tasks 2 and 4 use CI values of 0, 10, 50, 200 and 999. Their default objective uses flight time in hours and fuel burn in pounds. The dynamics and printed flight time and fuel burn use seconds and kilograms.
 - Task 3 uses approximate Madrid-Barajas and Paris-CDG horizontal endpoints at FL380, with a common fixed arrival time of approximately 5,001 s. Heading follows the statement's convention: zero is east, increasing toward north.
 - Task 4 uses a 1,000 km clean-configuration segment starting and ending at 10,000 ft, 300 kt TAS and zero flight-path angle. These boundary conditions, lift-coefficient bounds and flight-path limits are explicit editable assumptions. It does not model runway operations or flap/gear transitions.
 - Successful IPOPT termination establishes a numerical local solution. It does not prove global optimality, between-stage feasibility or mesh independence. Task 4's minimum-fuel descent retains flight-path-angle oscillations on the default mesh; refine the mesh before interpreting those features as physical conclusions.
